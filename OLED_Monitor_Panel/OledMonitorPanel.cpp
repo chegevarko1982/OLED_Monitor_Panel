@@ -64,6 +64,35 @@ static void padLeft(char *dst, uint8_t width, const char *src)
 }
 
 /*
+  Right-aligns a numeric value in a field of `width` digits, zero padded, and
+  falls back to a field of dashes when the string is not a number at all or
+  the value lies outside [lo, hi].
+
+  Two reasons this exists next to padLeft(). MobiFlight sends "-0" for VOR DME
+  when no station is tuned; padLeft keeps the rightmost characters of the
+  source, so the screen rendered "0-0". And the radio altimeter is only
+  meaningful up to 2500 ft - above that the sim keeps sending the true height
+  above ground, which has no business on that screen.
+*/
+static void padLeftRanged(char *dst, uint8_t width, const char *src, int16_t lo, int16_t hi)
+{
+    char *end;
+    long  v = strtol(src, &end, 10);
+
+    if (end == src || v < lo || v > hi) {
+        memset(dst, '-', width);
+        dst[width] = '\0';
+        return;
+    }
+
+    dst[width] = '\0';
+    for (int8_t i = width - 1; i >= 0; i--) {
+        dst[i] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+}
+
+/*
   Right-pad dst (in place) with fill up to width chars, without exceeding
   dstSize - 1 chars. Used only on local display copies, never on the
   stored globals.
@@ -571,7 +600,8 @@ void OledMonitorPanel::updateDisplayEfisRight(void)
     }
 
     char strHdgValue3[4];
-    padLeft(strHdgValue3, 3, efisRightBaroValueHpa);
+    // No station tuned reads as 0 (or "-0") - show dashes, not a distance.
+    padLeftRanged(strHdgValue3, 3, efisRightBaroValueHpa, 1, 999);
     renderLabelValue(TCA9548A_CHANNEL_EFIS_RIGHT,
                       "VOR DME", 13, &FreeSans7pt7b,
                       strHdgValue3, 21, 55, &DSEG7Classic_Regular18pt7b,
@@ -671,7 +701,8 @@ void OledMonitorPanel::updateDisplayFcuFpa(void)
     if (lightTestOn == 1) {
         copyValue(strAltValue2, sizeof(strAltValue2), "88888");
     } else {
-        padLeft(strAltValue2, 5, efisRightBaroValueHg);
+        // Radio altimeter reads 0..2500 ft; anything above is out of range.
+        padLeftRanged(strAltValue2, 5, efisRightBaroValueHg, 0, 2500);
     }
 
     renderLabelValue(TCA9548A_CHANNEL_FCU_FPA,
