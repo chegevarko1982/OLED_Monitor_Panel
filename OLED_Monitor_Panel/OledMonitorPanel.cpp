@@ -116,6 +116,10 @@ void OledMonitorPanel::begin()
     // //**************************
     setTCAChannel(TCA9548A_CHANNEL_EFIS_LEFT);
     oled->begin(SCREEN_ADDRESS, true); // Address 0x3C default
+    // One framebuffer is shared by all eight displays, so this applies to all
+    // of them. Without it a glyph that would cross the right edge is moved to
+    // the start of the next line instead of being clipped.
+    oled->setTextWrap(false);
     oled->display();
     updateDisplayEfisLeft();
 
@@ -416,8 +420,28 @@ Has to be redone, only tests
   its sign handling, dual fonts, and V/S-vs-FPA branching don't reduce to
   this shape without obscuring the logic.
 */
+/*
+  Draws text horizontally centred on the 128 px wide screen at baseline y,
+  using whatever font is currently selected. The label positions in the
+  original firmware were hand-tuned for three-character labels (x = 50), so
+  anything longer drifted right - "VOR DME" is 63 px wide and ended up hard
+  against the right edge, and "RADIO ALT" sat well left of centre. Measuring
+  the string means a label can be renamed without re-tuning a magic x.
+*/
+void OledMonitorPanel::printCentered(const char *text, int16_t y)
+{
+    int16_t  x1, y1;
+    uint16_t w, h;
+
+    oled->getTextBounds(text, 0, y, &x1, &y1, &w, &h);
+    int16_t x = ((int16_t)SCREEN_WIDTH - (int16_t)w) / 2 - x1;
+    if (x < 0) x = 0;
+    oled->setCursor(x, y);
+    oled->println(text);
+}
+
 void OledMonitorPanel::renderLabelValue(byte channel,
-                                 const char *labelText, int16_t labelX, int16_t labelY, const GFXfont *labelFont,
+                                 const char *labelText, int16_t labelY, const GFXfont *labelFont,
                                  const char *valueText, int16_t valueX, int16_t valueY, const GFXfont *valueFont,
                                  bool drawDot, int16_t dotX, int16_t dotY)
 {
@@ -427,8 +451,7 @@ void OledMonitorPanel::renderLabelValue(byte channel,
     oled->setTextSize(1);
 
     oled->setFont(labelFont);
-    oled->setCursor(labelX, labelY);
-    oled->println(labelText);
+    printCentered(labelText, labelY);
 
     oled->setFont(valueFont);
     oled->setCursor(valueX, valueY);
@@ -465,7 +488,7 @@ void OledMonitorPanel::updateDisplayAux(void) // добавил 8й экран
     char strHdgValue5[4];
     padLeft(strHdgValue5, 3, CRSValue);
     renderLabelValue(TCA9548A_CHANNEL_Aux,
-                      "CRS", 50, 13, &FreeSans7pt7b,
+                      "CRS", 13, &FreeSans7pt7b,
                       strHdgValue5, 20, 55, &DSEG7Classic_Regular18pt7b,
                       false, 0, 0);
 }
@@ -507,12 +530,12 @@ void OledMonitorPanel::updateDisplayEfisLeft(void)
 
     if (fcuSpeedManagedMode == 1) {
         renderLabelValue(TCA9548A_CHANNEL_EFIS_LEFT,
-                          labelText, 50, 13, &FreeSans6pt7b,
+                          labelText, 13, &FreeSans6pt7b,
                           "---", 28, 55, &DSEG7Classic_Regular16pt7b,
                           true, 104, 40);
     } else {
         renderLabelValue(TCA9548A_CHANNEL_EFIS_LEFT,
-                          labelText, 50, 13, &FreeSans6pt7b,
+                          labelText, 13, &FreeSans6pt7b,
                           displayValue, 20, 55, &DSEG7Classic_Regular18pt7b,
                           false, 0, 0);
     }
@@ -543,7 +566,7 @@ void OledMonitorPanel::updateDisplayEfisRight(void)
     char strHdgValue3[4];
     padLeft(strHdgValue3, 3, efisRightBaroValueHpa);
     renderLabelValue(TCA9548A_CHANNEL_EFIS_RIGHT,
-                      "VOR DME", 50, 13, &FreeSans7pt7b,
+                      "VOR DME", 13, &FreeSans7pt7b,
                       strHdgValue3, 20, 55, &DSEG7Classic_Regular18pt7b,
                       false, 0, 0);
 } // updateDisplayEfisRight
@@ -572,26 +595,26 @@ void OledMonitorPanel::updateDisplayFcuSpd(void)
     copyValue(displayValue, sizeof(displayValue), fcuSpeedValue);
 
     const char *labelText;
-    int16_t labelX, labelY;
+    int16_t labelY;
     if (fcuSpeedMode == 1) {
         labelText = "MACH";
-        labelX = 65; labelY = 20;
+        labelY = 20;
         // MACH is always sent as x.xx (4 characters), so it is shown as-is.
         // The original firmware had a displayValue[4] write here that never had
         // any effect with Arduino String, and would corrupt the buffer if kept.
     } else {
         labelText = "SPEED";
-        labelX = 50; labelY = 13;
+        labelY = 13;
     }
 
     if (fcuSpeedManagedMode == 1) {
         renderLabelValue(TCA9548A_CHANNEL_FCU_SPD,
-                          labelText, labelX, labelY, &FreeSans6pt7b,
+                          labelText, labelY, &FreeSans6pt7b,
                           "---", 28, 55, &DSEG7Classic_Regular16pt7b,
                           true, 104, 40);
     } else {
         renderLabelValue(TCA9548A_CHANNEL_FCU_SPD,
-                          labelText, labelX, labelY, &FreeSans6pt7b,
+                          labelText, labelY, &FreeSans6pt7b,
                           displayValue, 28, 55, &DSEG7Classic_Regular18pt7b,
                           false, 0, 0);
     }
@@ -621,14 +644,14 @@ void OledMonitorPanel::updateDisplayFcuHdg(void)
 
     if (fcuHdgManagedMode == 1) {
         renderLabelValue(TCA9548A_CHANNEL_FCU_HDG,
-                          "HDG", 50, 13, &FreeSans7pt7b,
+                          "HDG", 13, &FreeSans7pt7b,
                           "---", 28, 55, &DSEG7Classic_Regular15pt7b,
                           true, 104, 40);
     } else {
         char strHdgValue[4];
         padLeft(strHdgValue, 3, fcuHdgValue);
         renderLabelValue(TCA9548A_CHANNEL_FCU_HDG,
-                          "HDG", 50, 13, &FreeSans7pt7b,
+                          "HDG", 13, &FreeSans7pt7b,
                           strHdgValue, 20, 55, &DSEG7Classic_Regular18pt7b,
                           false, 0, 0);
     }
@@ -645,7 +668,7 @@ void OledMonitorPanel::updateDisplayFcuFpa(void)
     }
 
     renderLabelValue(TCA9548A_CHANNEL_FCU_FPA,
-                      "RADIO ALT", 10, 16, &FreeSans7pt7b,
+                      "RADIO ALT", 16, &FreeSans7pt7b,
                       strAltValue2, 0, 55, &DSEG7Classic_Regular16pt7b,
                       false, 0, 0);
 }
@@ -664,7 +687,7 @@ void OledMonitorPanel::updateDisplayFcuAlt(void)
     }
 
     renderLabelValue(TCA9548A_CHANNEL_FCU_ALT,
-                      "ALT", 48, 15, &FreeSans8pt7b,
+                      "ALT", 15, &FreeSans8pt7b,
                       strAltValue, 1, 55, &DSEG7Classic_Regular16pt7b,
                       drawDot, 124, 39);
 } // updateDisplayFcuAlt
@@ -681,8 +704,7 @@ void OledMonitorPanel::updateDisplayFcuVs(void)
     oled->setFont(&FreeSans8pt7b);
     oled->setTextSize(1);
     if (lightTestOn == 1) {
-        oled->setCursor(40, 20);
-        oled->print("V/S");
+        printCentered("V/S", 20);
 
         oled->setFont(&FreeSans18pt7b);
         oled->setCursor(0, 50);
@@ -700,8 +722,7 @@ void OledMonitorPanel::updateDisplayFcuVs(void)
     } else {
 
 
-        oled->setCursor(40, 20);
-        oled->print("V/S");
+        printCentered("V/S", 20);
 
         if (fcuVsManagedMode == 1) {
             oled->setFont(&DSEG7Classic_Regular15pt7b);

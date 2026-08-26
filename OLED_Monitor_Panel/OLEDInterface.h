@@ -82,6 +82,22 @@ public:
         else
             oled_1106->setCursor(x, y);
     }
+    void setTextWrap(bool w)
+    {
+        if (_type == SSD1306)
+            oled_1306->setTextWrap(w);
+        else
+            oled_1106->setTextWrap(w);
+    }
+    // Measures the given string with the font/size currently set, so callers
+    // can place it themselves (e.g. centre it). Must be called after setFont().
+    void getTextBounds(const char *t, int16_t x, int16_t y, int16_t *x1, int16_t *y1, uint16_t *w, uint16_t *h)
+    {
+        if (_type == SSD1306)
+            oled_1306->getTextBounds(t, x, y, x1, y1, w, h);
+        else
+            oled_1106->getTextBounds(t, x, y, x1, y1, w, h);
+    }
     void setTextSize(uint8_t s)
     {
         if (_type == SSD1306)

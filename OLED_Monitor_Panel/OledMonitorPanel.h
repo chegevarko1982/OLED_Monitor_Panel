@@ -49,8 +49,9 @@ private:
     void setTCAChannel(byte i);
     void blankAllDisplays(void);
     void renderScreen(uint8_t scr);
+    void printCentered(const char *text, int16_t y);
     void renderLabelValue(byte channel,
-                           const char *labelText, int16_t labelX, int16_t labelY, const GFXfont *labelFont,
+                           const char *labelText, int16_t labelY, const GFXfont *labelFont,
                            const char *valueText, int16_t valueX, int16_t valueY, const GFXfont *valueFont,
                            bool drawDot, int16_t dotX, int16_t dotY);
     void updateDisplayEfisLeft(void);
