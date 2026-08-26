@@ -13,12 +13,13 @@ eight and re-purposed for a different screen layout.
 - TCA9548A I2C multiplexer
 
 All displays share I2C address `0x3C` and are selected through the multiplexer.
-Set the multiplexer address in MobiFlight to `0x70` or `0x71`:
+This hardware has the multiplexer at address `0x71`.
+The firmware selects the panel driver based on address parity (`_addrI2C & 0x01`):
 
 | Address | Driver |
 |---|---|
-| even (`0x70`) | SH1106 |
-| odd (`0x71`) | SSD1306 |
+| even (`0x70`, `0x72`, ...) | SH1106 |
+| odd (`0x71`, `0x73`, ...) | SSD1306 |
 
 ## Screen layout
 
@@ -32,6 +33,17 @@ Set the multiplexer address in MobiFlight to `0x70` or `0x71`:
 | 5 | FCU ALT | 13, 14 |
 | 6 | VOR DME | 5 |
 | 7 | FCU V/S | 15, 16, 17 |
+
+Two screens gate their value and show dashes outside it, because the sim keeps sending a
+number where the instrument would show nothing:
+
+| Screen | Digits | Valid range | Outside the range |
+|---|---|---|---|
+| Radio Altimeter | 4, leading zeros | 0..2500 ft | `----` |
+| VOR DME | 3, leading zeros | 1..999 | `---` |
+
+A non-numeric value shows dashes as well - MobiFlight sends `"-0"` for VOR DME when no
+station is tuned.
 
 Messages 9 (speed managed) and 18 (speed/mach mode) affect both the FCU SPD and MACH screens.
 Message 19 drives the lamp test on all eight screens; message 12 switches V/S between V/S and FPA mode.
@@ -48,6 +60,8 @@ The core MobiFlight firmware source is fetched automatically into `src/` at the 
 > **Note:** if your project path contains spaces, the git commands in `get_CoreFiles.py` must have
 > their paths quoted, otherwise the core source silently fails to update and the build compiles
 > against whatever version is already in `src/`. This is already fixed in this repository.
+
+For details on the partial-update rendering optimization and display refresh performance, see `documents/PLAN_partial_update.md`.
 
 A release ZIP is written to `_dist/` by `copy_fw_files.py`.
 
