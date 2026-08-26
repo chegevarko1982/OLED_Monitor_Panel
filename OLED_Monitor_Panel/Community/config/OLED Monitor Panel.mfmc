@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <ModuleType>OLED Monitor Panel Mega</ModuleType>
+  <ModuleName>OLED Monitor Panel</ModuleName>
+  <PowerSavingTime>600</PowerSavingTime>
+  <CustomDevice Name="OLED Monitor Panel" CustomType="OLED_MONITOR_PANEL" Pins="112" Config="">
+    <ConfiguredPins>
+      <string>112</string>
+    </ConfiguredPins>
+  </CustomDevice>
+</Config>

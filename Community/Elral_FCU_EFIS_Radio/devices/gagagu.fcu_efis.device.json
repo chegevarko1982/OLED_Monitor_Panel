@@ -1,0 +1,123 @@
+{
+    "$schema": "./mfdevice.schema.json",
+    "Info": {
+      "Label": "RADIO PANEL",
+      "Type": "GAGAGU_FCU-EFIS",
+      "Author": "Gagagu/elral/Ernesto",
+      "URL": "https://github.com",
+      "Version" : "1.0.12"
+    },
+    "Config": {
+      "Pins": [],
+      "I2C": {
+        "Enabled": true,
+        "Addresses": [
+          "0x70",
+          "0x71"
+        ]
+      }
+    },
+    "MessageTypes": [
+      {
+        "id": 0,
+        "label": "Efis Left Baro Select",
+        "description": "$ inHg=0, hPa=1"
+      },
+      {
+        "id": 1,
+        "label": "RADIO COM1",
+        "description": "$ RADIO COM1 Freq"
+      },
+      {
+        "id": 2,
+        "label": "RADIO COM2",
+        "description": "$ RADIO COM2 Freq"
+      },
+      {
+        "id": 3,
+        "label": "Efis Left Baro Mode", // Squawk MODE
+        "description": "$ 0 = QFE; 1 = QNH; 2 = STD"
+      },	  
+      {
+        "id": 4,
+        "label": "Efis Right Baro Select",
+        "description": "$ inHg=0, hPa=1"
+      },
+      {
+        "id": 5,
+        "label": "RADIO NAV1",
+        "description": "$ RADIO NAV1 Freq"
+      },
+      {
+        "id": 6,
+        "label": "RADIO NAV2",
+        "description": "$ RADIO NAV2 Freq"
+      },
+      {
+        "id": 7,
+        "label": "Efis Right Baro Mode",
+        "description": "$ 0 = QFE; 1 = QNH; 2 = STD"
+      },
+      {
+        "id": 8,
+        "label": "ADF Freq 2",
+        "description": "$"
+      },
+      {
+        "id": 9,
+        "label": "Fcu Speed Managed",
+        "description": "$ 0 = No; 1 = Yes"
+      },
+      {
+        "id": 10,
+        "label": "Fcu Hdg Value",
+        "description": "$"
+      },
+      {
+        "id": 11,
+        "label": "Fcu Hdg Managed",
+        "description": "$ 0 = No; 1 = Yes"
+      },
+      {
+        "id": 12,
+        "label": "Fcu Trk Mode",
+        "description": "$ 0 = No; 1 = Yes"
+      },
+	    {
+        "id": 13,
+        "label": "ADF Freq 1",
+        "description": "$"
+      },
+	    {
+        "id": 14,
+        "label": "Fcu Alt Managed",
+        "description": "$ 0 = No; 1 = Yes"
+      },
+	    {
+        "id": 15,
+        "label": "Transponder Val",
+        "description": "$"
+      },
+	    {
+        "id": 16,
+        "label": "Fcu VS Value FPA",
+        "description": "$"
+      },	  
+	    {
+        "id": 17,
+        "label": "Fcu VS Managed",
+        "description": "$ 0 = No; 1 = Yes"
+      },	  
+	    {
+        "id": 18,
+        "label": "Speed/Mach Mode",
+        "description": "$ 0 = Speed Mode; 1 = Mach mode"
+      },	  
+	    {
+        "id": 19,
+        "label": "Light Test",
+        "description": "$ 0 = Light Test OFF; 1 = Light Test ON"
+      }
+    ]
+  }
+  

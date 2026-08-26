@@ -1,0 +1,235 @@
+﻿<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<MobiflightConnector>
+  <outputs>
+    <config guid="d18d87ce-6c1d-4006-96ac-a52f6af8e15b">
+      <active>true</active>
+      <description>Left Efis Baro Select</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(L:S_FCU_EFIS1_BARO_MODE)" UUID="b192b3b7-e6ee-444a-8349-bd9fa0c074f6" />
+        <test type="Float" value="1" />
+        <modifiers>
+          <transformation active="False" expression="$" />
+          <comparison active="False" value="" operand="" ifValue="" elseValue="" />
+        </modifiers>
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="0" value=";$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="f5cf1a00-1146-4b36-9789-df5aaea98226">
+      <active>true</active>
+      <description>Left Efis Baro Value Hpa</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(A:KOHLSMAN SETTING HG, Number) 100 / near" UUID="6a967ca0-889a-4841-8244-7aae9c214407" />
+        <test type="String" value="1024" />
+        <modifiers>
+          <transformation active="False" expression="$" />
+          <comparison active="True" value="1000" operand="&lt;" ifValue="'0'+$" elseValue="$" />
+        </modifiers>
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="1" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="d3e01748-f08a-4f35-b19a-dfdc5cb93c5c">
+      <active>true</active>
+      <description>Left Efis Baro Value Hg</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(A:KOHLSMAN SETTING HG, Number) 33.866 / near" UUID="ca26c5cf-f9a9-46cd-9e47-1d50f9c03fe8" />
+        <test type="Float" value="2995" />
+        <modifiers>
+          <transformation active="False" expression="$" />
+          <comparison active="False" value="" operand="" ifValue="" elseValue="" />
+        </modifiers>
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="2" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="7cceeb6e-484a-4557-9de2-d398a44d8bce">
+      <active>true</active>
+      <description>Left Efis Baro Mode</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(L:S_FCU_EFIS1_BARO_STD)" UUID="0468d4e6-7488-4c67-a41a-23ede3e89391" />
+        <test type="Float" value="0" />
+        <modifiers>
+          <comparison active="True" value="0" operand="=" ifValue="1" elseValue="2" />
+        </modifiers>
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="3" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="aad1c5ad-9dd5-44d2-be01-d0f9d6938a15">
+      <active>true</active>
+      <description>Fcu Speed Value</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(L:FNX2PLD_fcuSpd, Knots)" UUID="82853f1e-dcc2-4748-bb34-c145ef748598" />
+        <test type="Float" value="450" />
+        <modifiers>
+          <comparison active="True" value="100" operand="&lt;" ifValue="0.$" elseValue="" />
+        </modifiers>
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="8" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="f14e8c61-d8ec-44fb-825f-29a6191072fd">
+      <active>true</active>
+      <description>Fcu Speed Managed</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(L:I_FCU_SPEED_MANAGED)" UUID="28029cad-8379-419c-ba1f-589cada617fa" />
+        <test type="Float" value="1" />
+        <modifiers>
+          <transformation active="False" expression="$" />
+          <comparison active="False" value="2" operand="=" ifValue="1" elseValue="0" />
+        </modifiers>
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="9" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="446fa43d-0f89-44a1-8edb-d9c555692119">
+      <active>true</active>
+      <description>Fcu Hdg Value</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(L:FNX2PLD_fcuHdg,Degrees)" UUID="93407070-d47f-48a7-9537-4d8ca18f0d89" />
+        <test type="Float" value="254" />
+        <modifiers>
+          <transformation active="False" expression="$" />
+          <comparison active="False" value="100" operand="&lt;" ifValue="'0'+$" elseValue="$" />
+        </modifiers>
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="10" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="bc49c326-f9c3-4d5d-97ab-c96e8f86737c">
+      <active>true</active>
+      <description>Fcu Hdg Managed</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(L:I_FCU_HEADING_MANAGED)" UUID="b7a4af17-9112-4a88-9629-e10acdd604e8" />
+        <test type="Float" value="1" />
+        <modifiers>
+          <transformation active="False" expression="$" />
+          <comparison active="False" value="2" operand="=" ifValue="1" elseValue="0" />
+        </modifiers>
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="11" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="dd2510c3-0a7a-4ce4-ba59-2b61608fa910">
+      <active>true</active>
+      <description>Fcu Trk Mode</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(L:I_FCU_TRACK_FPA_MODE)" UUID="0c24f12b-0016-4da7-b941-587a581e5686" />
+        <test type="Float" value="1" />
+        <modifiers>
+          <transformation active="False" expression="$" />
+          <comparison active="False" value="" operand="" ifValue="" elseValue="" />
+        </modifiers>
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="12" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="c775b9fb-eff2-49b1-9223-98f01b6aceb5">
+      <active>true</active>
+      <description>Fcu Alt Value</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(L:FNX2PLD_fcuAlt, Feet)" UUID="a7c09623-b340-441c-9087-4bbec9b41bc4" />
+        <test type="Float" value="12350" />
+        <modifiers />
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="13" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="69a7542f-ac7f-4c3e-a25b-77f3253407ea">
+      <active>true</active>
+      <description>Fcu Alt Managed</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(L:I_FCU_ALTITUDE_MANAGED)" UUID="bca70365-cd7c-4408-ad8e-4d7c5f578166" />
+        <test type="Float" value="1" />
+        <modifiers>
+          <transformation active="False" expression="$" />
+          <comparison active="False" value="2" operand="=" ifValue="1" elseValue="0" />
+        </modifiers>
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="14" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="26fbb7d5-2bad-4d72-a31d-8344528f5a0d">
+      <active>true</active>
+      <description>Fcu Vs Value</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(L:FNX2PLD_fcuVs, Ft/min)" UUID="8689ddbb-7786-4805-add4-05cd92ea249c" />
+        <test type="Float" value="1234" />
+        <modifiers>
+          <transformation active="False" expression="$" />
+          <comparison active="False" value="" operand="&lt;" ifValue="" elseValue="" />
+        </modifiers>
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="15" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="e7f869e0-9ff3-408d-a7f6-583d064ede42">
+      <active>true</active>
+      <description>Fcu Vs Mode</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(L:A32NX_FCU_VS_MANAGED)" UUID="2bddc0c5-0842-4686-8c7b-b902dd8b236b" />
+        <test type="Float" value="1" />
+        <modifiers>
+          <transformation active="False" expression="$" />
+          <comparison active="False" value="" operand="" ifValue="" elseValue="" />
+        </modifiers>
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="17" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="ecda4002-feea-4249-8b14-f01fe1529830">
+      <active>true</active>
+      <description>Fcu Vs Value FPA</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(L:FNX2PLD_fcuVs, Ft/min)" UUID="8689ddbb-7786-4805-add4-05cd92ea249c" />
+        <test type="Float" value="1" />
+        <modifiers>
+          <transformation active="True" expression="Round($,2)" />
+          <comparison active="False" value="" operand="" ifValue="" elseValue="" />
+        </modifiers>
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="16" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="a1d2cf13-9c0c-4ab2-a85a-eec0ac6f0044">
+      <active>true</active>
+      <description>FCU Speed Mode</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(L:I_FCU_MACH_MODE)" UUID="cf9c73a0-ab34-455b-866d-f47c09d19336" />
+        <test type="Float" value="1" />
+        <modifiers />
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="18" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+    <config guid="9c746246-2356-46e2-9744-92c9729356d1">
+      <active>true</active>
+      <description>Light test</description>
+      <settings msdata:InstanceType="MobiFlight.OutputConfigItem, MFConnector, Version=10.2.1.0, Culture=neutral, PublicKeyToken=null" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+        <source type="SimConnect" VarType="CODE" Value="(L:I_OH_APU_AUTOEXTING_TEST_L)" UUID="030e2291-3306-4092-b8a1-7b42f0f1f918" />
+        <test type="Float" value="1" />
+        <modifiers />
+        <display type="CustomDevice" serial="Gagagu FCU-EFIS/ SN-397-88A" trigger="normal" customType="" customName="Gagagu FCU-EFIS" messageType="19" value="$" />
+        <preconditions />
+        <configrefs />
+      </settings>
+    </config>
+  </outputs>
+  <inputs />
+</MobiflightConnector>

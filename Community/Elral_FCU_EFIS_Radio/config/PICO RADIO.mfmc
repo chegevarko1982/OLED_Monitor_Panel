@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <ModuleType>Gagagu FCU/EFIS RaspiPico</ModuleType>
+  <ModuleName>PICO RADIO</ModuleName>
+  <PowerSavingTime>600</PowerSavingTime>
+  <CustomDevice Name="Gagagu FCU-EFIS" CustomType="GAGAGU_FCU-EFIS" Pins="112" Config="">
+    <ConfiguredPins>
+      <string>112</string>
+    </ConfiguredPins>
+  </CustomDevice>
+  <Button Name="R SW1" Pin="1" />
+  <Button Name="R SW2" Pin="2" />
+  <Button Name="R SW3" Pin="3" />
+  <Button Name="R SW4" Pin="6" />
+  <Button Name="R SW5" Pin="7" />
+  <Button Name="L SW1" Pin="8" />
+  <Button Name="L SW2" Pin="9" />
+  <Button Name="L SW3" Pin="10" />
+  <Button Name="L SW4" Pin="11" />
+  <Button Name="L SW5" Pin="12" />
+  <Button Name="L SW6" Pin="13" />
+  <Button Name="L SW7" Pin="14" />
+  <Button Name="L SW 8" Pin="15" />
+  <Output Name="LED1" Pin="26" />
+  <Output Name="LED2" Pin="0" />
+  <Output Name="LED3" Pin="27" />
+  <Output Name="LED4" Pin="28" />
+  <Button Name="RADIO ENC BTN" Pin="18" />
+  <Encoder Name="REnc Bg" PinLeft="20" PinRight="19" EncoderType="0" />
+  <Encoder Name="REnc SML" PinLeft="17" PinRight="16" EncoderType="0" />
+</Config>
