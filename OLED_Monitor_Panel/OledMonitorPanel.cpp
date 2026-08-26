@@ -696,18 +696,21 @@ void OledMonitorPanel::updateDisplayFcuHdg(void)
 
 void OledMonitorPanel::updateDisplayFcuFpa(void)
 {
-    char strAltValue2[6];
+    // Four digits, not five: the range tops out at 2500 ft, so a fifth digit
+    // could only ever be a leading zero. Dropping it leaves room for the same
+    // 18pt face the other numeric screens use, at x = 6 (ink 9..117).
+    char strAltValue2[5];
 
     if (lightTestOn == 1) {
-        copyValue(strAltValue2, sizeof(strAltValue2), "88888");
+        copyValue(strAltValue2, sizeof(strAltValue2), "8888");
     } else {
         // Radio altimeter reads 0..2500 ft; anything above is out of range.
-        padLeftRanged(strAltValue2, 5, efisRightBaroValueHg, 0, 2500);
+        padLeftRanged(strAltValue2, 4, efisRightBaroValueHg, 0, 2500);
     }
 
     renderLabelValue(TCA9548A_CHANNEL_FCU_FPA,
                       "RADIO ALT", 16, &FreeSans7pt7b,
-                      strAltValue2, 1, 55, &DSEG7Classic_Regular16pt7b,
+                      strAltValue2, 6, 55, &DSEG7Classic_Regular18pt7b,
                       false, 0, 0);
 }
 
