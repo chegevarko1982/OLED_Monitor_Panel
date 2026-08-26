@@ -74,6 +74,26 @@ static void padLeft(char *dst, uint8_t width, const char *src)
   meaningful up to 2500 ft - above that the sim keeps sending the true height
   above ground, which has no business on that screen.
 */
+/*
+  Copies src into dst dropping any '.', giving the digit-cell string for a
+  value like MACH. The DSEG7 decimal point has xAdvance 0 - it is drawn
+  between two cells and occupies none - so "0.78" is three cells, not four.
+
+  Done by scanning rather than by fixed indices because the two ends of this
+  disagree about the format: oled_monitor_panel.device.json describes message
+  2 as "value without dot", while the shipped MobiFlight profile formats the
+  FCU speed value with one. Either way this yields the same cell string, and
+  a short value can no longer read past the end of the source buffer.
+*/
+static void stripDot(char *dst, uint8_t dstSize, const char *src)
+{
+    uint8_t n = 0;
+    for (; *src && n < dstSize - 1; src++) {
+        if (*src != '.') dst[n++] = *src;
+    }
+    dst[n] = 0;
+}
+
 static void padLeftRanged(char *dst, uint8_t width, const char *src, int16_t lo, int16_t hi)
 {
     char *end;
@@ -109,11 +129,92 @@ static bool updateValue(char *dst, uint8_t dstSize, const char *src)
     return true;
 }
 
+/*
+  Scratch column buffer for fastDrawDigit(). File-scope rather than a class
+  member: it only ever holds one glyph's worth of columns while that
+  function runs, so there is nothing to gain from giving every instance its
+  own copy, and keeping it off the class shrinks OledMonitorPanel itself.
+  32 covers the widest glyph either DSEG7 face at 18pt/16pt uses (22 and 19
+  px respectively) with headroom; fastDrawDigit() guards against anything
+  wider instead of trusting that.
+*/
+static uint8_t colbuf[32];
+
+/*
+  Per-screen digit-cell geometry for renderCells()/commitCells(). One entry
+  per SCR_* index, in PROGMEM since it is read only a handful of times per
+  update and RAM is the scarce resource here. Numbers are derived from the
+  DSEG7 GFXglyph tables (xAdvance/xOffset/width/yOffset) and the cursor X
+  already used by each updateDisplayXxx() call site - see the class header
+  comment on renderCells() for the geometry this encodes.
+
+  Constraint that is easy to break by accident: a cell rectangle covers whole
+  8-row pages, so on an 18pt screen it starts at row 16 and on the 16pt ALT
+  screen at row 24. No label may ink a row at or below that, or redrawing one
+  cell will erase part of the label - which a full repaint would then put back,
+  so it shows up as a label that decays while a value changes and heals when
+  the mode does. Verified margins: 18pt screens +2 rows, RADIO ALT +0 (its
+  label ends exactly on row 15), ALT +8.
+*/
+struct CellGeom {
+    uint8_t channel;   // TCA9548A_CHANNEL_* value
+    uint8_t x;         // cursor x of digit cell 0
+    uint8_t advance;   // cell pitch = the font's xAdvance
+    uint8_t blitW;     // width of the pushed rectangle
+    uint8_t page0;
+    uint8_t pages;
+    uint8_t digits;    // number of digit cells
+    uint8_t fontIdx;   // 0 = DSEG7 18pt, 1 = DSEG7 16pt
+};
+
+static const CellGeom cellGeomTable[] PROGMEM = {
+    // SCR_EFIS_LEFT
+    { TCA9548A_CHANNEL_EFIS_LEFT,  21, 29, 24, 2, 5, 3, 0 },
+    // SCR_EFIS_RIGHT
+    { TCA9548A_CHANNEL_EFIS_RIGHT, 21, 29, 24, 2, 5, 3, 0 },
+    // SCR_FCU_SPD
+    { TCA9548A_CHANNEL_FCU_SPD,    21, 29, 24, 2, 5, 3, 0 },
+    // SCR_FCU_HDG
+    { TCA9548A_CHANNEL_FCU_HDG,    21, 29, 24, 2, 5, 3, 0 },
+    // SCR_FCU_FPA
+    { TCA9548A_CHANNEL_FCU_FPA,     6, 29, 24, 2, 5, 4, 0 },
+    // SCR_FCU_ALT
+    { TCA9548A_CHANNEL_FCU_ALT,     1, 25, 21, 3, 4, 5, 1 },
+    // SCR_FCU_VS - no partial path for this screen, digits == 0 means
+    // renderCells() always defers to the full repaint.
+    { 0, 0, 0, 0, 0, 0, 0, 0 },
+    // SCR_AUX
+    { TCA9548A_CHANNEL_Aux,        21, 29, 24, 2, 5, 3, 0 },
+};
+
+// Catches a SCR_* enum edit that forgets to update the table above, rather
+// than letting renderCells() silently read past the end of it.
+static_assert(sizeof(cellGeomTable) / sizeof(cellGeomTable[0]) == SCR_COUNT,
+              "cellGeomTable must have exactly SCR_COUNT entries");
+
+/*
+  Maps a CellGeom::fontIdx to the actual font pointer. Kept out of the
+  PROGMEM struct itself - a GFXfont* read back via memcpy_P would still be a
+  flash address, so storing it there buys nothing and just duplicates what
+  this switch already expresses.
+*/
+static const GFXfont *fontForIndex(uint8_t fontIdx)
+{
+    switch (fontIdx) {
+    case 1:  return &DSEG7Classic_Regular16pt7b;
+    default: return &DSEG7Classic_Regular18pt7b;
+    }
+}
+
 OledMonitorPanel::OledMonitorPanel()
 {
     _initialised = false;
     _currentChannel = 0xFF;
     _dirty = 0;
+    // Nothing has been drawn yet, so no shadow describes any screen. The
+    // device pool this object is placement-new'd into happens to be zeroed,
+    // but renderCells() correctness should not rest on that.
+    memset(_shadowSig, 0, sizeof(_shadowSig));
 }
 
 void OledMonitorPanel::attach(uint8_t addrI2C)
@@ -204,6 +305,10 @@ void OledMonitorPanel::begin()
 
     // All eight screens were just drawn above - nothing pending yet.
     _dirty = 0;
+
+    // Every screen above was fully repainted by an updateDisplayXxx() call,
+    // not renderCells(), so no shadow reflects what is actually on screen.
+    memset(_shadowSig, 0, sizeof(_shadowSig));
 }
 
 void OledMonitorPanel::detach()
@@ -432,6 +537,147 @@ void OledMonitorPanel::blankAllDisplays(void)
         oled->clearDisplay();
         oled->display();
     }
+
+    // The framebuffer no longer matches any shadow's idea of what is drawn.
+    memset(_shadowSig, 0, sizeof(_shadowSig));
+}
+
+/*
+  Rasterises glyph `c` of `font` straight into the shared page-major
+  framebuffer, OR-ing bits in rather than going through Adafruit_GFX's
+  drawPixel-per-pixel drawChar(). Measured 1246 us against 4589 us for one
+  DSEG7 18pt glyph on the actual board. Restricted to the page range
+  [page0, page0 + pages) - the caller is expected to pass the same range it
+  intends to push with displayRegion(), so nothing outside that range is
+  touched.
+
+  Baseline is always row DIGIT_BASELINE_Y on this panel, so it is not a
+  parameter - every digit cell on every screen shares one baseline.
+*/
+void OledMonitorPanel::fastDrawDigit(uint8_t cursorX, uint8_t page0, uint8_t pages,
+                                      const GFXfont *font, char c)
+{
+    GFXglyph *g  = &(((GFXglyph *)pgm_read_ptr(&font->glyph))[c - pgm_read_byte(&font->first)]);
+    uint8_t  *bm = (uint8_t *)pgm_read_ptr(&font->bitmap);
+    uint16_t  bo = pgm_read_word(&g->bitmapOffset);
+    uint8_t   gw = pgm_read_byte(&g->width);
+    uint8_t   gh = pgm_read_byte(&g->height);
+    int8_t    xo = pgm_read_byte(&g->xOffset);
+    int8_t    yo = pgm_read_byte(&g->yOffset);
+
+    // A glyph wider than colbuf can never happen with the fonts this panel
+    // uses, but guard it rather than trust that silently.
+    if (gw > sizeof(colbuf)) return;
+
+    // The framebuffer is the only thing between this and the heap. Every
+    // caller passes geometry from cellGeomTable, which fits - but a stray
+    // cursorX must not be able to write past the end of a page.
+    int16_t left = (int16_t)cursorX + xo;
+    if (left < 0 || left + gw > SCREEN_WIDTH) return;
+
+    uint8_t *fb = oled->getBuffer();
+
+    int16_t topRow = (int16_t)DIGIT_BASELINE_Y + yo - (int16_t)page0 * 8; // glyph top, relative to page0
+
+    for (uint8_t p = 0; p < pages; p++) {
+        memset(colbuf, 0, gw);
+        int16_t bandTop = (int16_t)p * 8;
+        for (uint8_t b = 0; b < 8; b++) {
+            int16_t gr = bandTop + b - topRow;       // row inside the glyph
+            if (gr < 0 || gr >= (int16_t)gh) continue;
+            uint16_t idx   = (uint16_t)gr * gw;
+            uint16_t byteI = bo + (idx >> 3);
+            uint8_t  bit   = 0x80 >> (idx & 7);
+            uint8_t  bits  = pgm_read_byte(bm + byteI);
+            uint8_t  mask  = 1 << b;
+            for (uint8_t cx = 0; cx < gw; cx++) {
+                if (bits & bit) colbuf[cx] |= mask;
+                bit >>= 1;
+                if (!bit) { bit = 0x80; bits = pgm_read_byte(bm + (++byteI)); }
+            }
+        }
+        uint8_t *dst = fb + (uint16_t)(page0 + p) * SCREEN_WIDTH + cursorX + xo;
+        for (uint8_t cx = 0; cx < gw; cx++) dst[cx] |= colbuf[cx];
+    }
+}
+
+/*
+  Zeroes a blitW x (pages * 8px) rectangle of the framebuffer at column
+  blitX, pages [page0, page0 + pages). A plain memset per page measures
+  43 us for 5 pages of 24 columns, against 389 us for the equivalent
+  fillRect() - fillRect draws pixel by pixel and doesn't know the rectangle
+  is page-aligned, so it can't do the memset Adafruit_GFX itself would
+  reach for if it exposed one.
+*/
+void OledMonitorPanel::clearCell(uint8_t blitX, uint8_t page0, uint8_t pages, uint8_t blitW)
+{
+    uint8_t *fb = oled->getBuffer();
+    for (uint8_t p = 0; p < pages; p++) {
+        memset(fb + (uint16_t)(page0 + p) * SCREEN_WIDTH + blitX, 0, blitW);
+    }
+}
+
+/*
+  Redraws only the digit cells whose character changed since the last
+  renderCells()/commitCells() on this screen, and pushes only those cells'
+  rectangles over I2C - the fast path this whole file exists for. Returns
+  false when the caller must fall back to a full repaint instead: the
+  layout signature `sig` does not match what commitCells() last recorded
+  for this screen (mode change, label change, different font - anything
+  that moved something renderCells() does not know how to erase), or this
+  screen has no cell geometry at all (SCR_FCU_VS).
+
+  `cells` must be a NUL-terminated string of exactly geom.digits characters,
+  one per cell, left to right. `sig` must be non-zero - 0 is reserved to
+  mean "unknown" in _shadowSig.
+*/
+bool OledMonitorPanel::renderCells(uint8_t scr, const char *cells, uint8_t sig)
+{
+    if (!_initialised) return false;
+    if (scr >= SCR_COUNT) return false;
+
+    CellGeom geom;
+    memcpy_P(&geom, &cellGeomTable[scr], sizeof(CellGeom));
+
+    if (geom.digits == 0) return false;        // this screen has no partial path (SCR_FCU_VS)
+    if (sig == 0) return false;
+    if (_shadowSig[scr] != sig) return false;   // layout on screen does not match - need a full repaint
+    if (strlen(cells) != geom.digits) return false;
+
+    const GFXfont *font = fontForIndex(geom.fontIdx);
+
+    setTCAChannel(geom.channel);
+    for (uint8_t i = 0; i < geom.digits; i++) {
+        if (cells[i] == _shadow[scr][i]) continue; // unchanged cell - zero cost
+
+        uint8_t cursorX = geom.x + i * geom.advance;
+        uint8_t blitX   = cursorX + 2;
+
+        clearCell(blitX, geom.page0, geom.pages, geom.blitW);
+        fastDrawDigit(cursorX, geom.page0, geom.pages, font, cells[i]);
+        oled->displayRegion(blitX, geom.page0, geom.blitW, geom.pages);
+
+        _shadow[scr][i] = cells[i];
+    }
+    return true;
+}
+
+/*
+  Records what a full repaint just put on `scr`, so the next update for
+  that screen can go through renderCells() instead of a full repaint. Call
+  this at the end of a full repaint (i.e. an updateDisplayXxx() body), with
+  the same `cells`/`sig` a following renderCells() call would use.
+*/
+void OledMonitorPanel::commitCells(uint8_t scr, const char *cells, uint8_t sig)
+{
+    if (!_initialised) return;
+    if (scr >= SCR_COUNT) return;
+
+    uint8_t len = strlen(cells);
+    if (len > sizeof(_shadow[0]) - 1) len = sizeof(_shadow[0]) - 1;
+    memcpy(_shadow[scr], cells, len);
+    _shadow[scr][len] = '\0';
+    _shadowSig[scr] = sig;
 }
 
 /*******************************************
@@ -523,10 +769,18 @@ void OledMonitorPanel::updateDisplayAux(void) // добавил 8й экран
 
     char strHdgValue5[4];
     padLeft(strHdgValue5, 3, CRSValue);
+
+    // Nothing besides lightTestOn changes this screen's layout - no managed
+    // mode, no label switch - so the signature carries no extra bits.
+    uint8_t sig = 0x80;
+
+    if (renderCells(SCR_AUX, strHdgValue5, sig)) return;
+
     renderLabelValue(TCA9548A_CHANNEL_Aux,
                       "CRS", 13, &FreeSans7pt7b,
                       strHdgValue5, 21, 55, &DSEG7Classic_Regular18pt7b,
                       false, 0, 0);
+    commitCells(SCR_AUX, strHdgValue5, sig);
 }
 
 
@@ -565,16 +819,33 @@ void OledMonitorPanel::updateDisplayEfisLeft(void)
     }
 
     if (fcuSpeedManagedMode == 1) {
+        // Managed dashes use a different font/x (and a dot) - not the cell
+        // layout, so this always takes the full repaint and never touches
+        // the shadow.
         renderLabelValue(TCA9548A_CHANNEL_EFIS_LEFT,
                           labelText, 13, &FreeSans6pt7b,
                           "---", 26, 55, &DSEG7Classic_Regular16pt7b,
                           true, 104, 40);
-    } else {
-        renderLabelValue(TCA9548A_CHANNEL_EFIS_LEFT,
-                          labelText, 13, &FreeSans6pt7b,
-                          displayValue, 21, 55, &DSEG7Classic_Regular18pt7b,
-                          false, 0, 0);
+        return;
     }
+
+    // bit0: fcuSpeedMode - the label text (MACH vs SPEED) this screen draws.
+    // MACH's value is "x.xx" (4 chars); see cells[] below for why that is
+    // still a 3-character cell string.
+    uint8_t sig = 0x80 | (fcuSpeedMode ? 0x01 : 0x00);
+
+    // The '.' of a MACH value takes no cell, so it is dropped here; for
+    // SPEED there is nothing to drop and this is a plain copy.
+    char cells[4];
+    stripDot(cells, sizeof(cells), displayValue);
+
+    if (renderCells(SCR_EFIS_LEFT, cells, sig)) return;
+
+    renderLabelValue(TCA9548A_CHANNEL_EFIS_LEFT,
+                      labelText, 13, &FreeSans6pt7b,
+                      displayValue, 21, 55, &DSEG7Classic_Regular18pt7b,
+                      false, 0, 0);
+    commitCells(SCR_EFIS_LEFT, cells, sig);
 } // updateDisplayEfisLeft
 
 void OledMonitorPanel::updateDisplayEfisRight(void)
@@ -601,11 +872,20 @@ void OledMonitorPanel::updateDisplayEfisRight(void)
 
     char strHdgValue3[4];
     // No station tuned reads as 0 (or "-0") - show dashes, not a distance.
+    // Dashes are drawn in the same font at the same x as real digits, so
+    // this is still an ordinary cell string - no extra sig bit needed.
     padLeftRanged(strHdgValue3, 3, efisRightBaroValueHpa, 1, 999);
+
+    // Nothing besides lightTestOn changes this screen's layout.
+    uint8_t sig = 0x80;
+
+    if (renderCells(SCR_EFIS_RIGHT, strHdgValue3, sig)) return;
+
     renderLabelValue(TCA9548A_CHANNEL_EFIS_RIGHT,
                       "VOR DME", 13, &FreeSans7pt7b,
                       strHdgValue3, 21, 55, &DSEG7Classic_Regular18pt7b,
                       false, 0, 0);
+    commitCells(SCR_EFIS_RIGHT, strHdgValue3, sig);
 } // updateDisplayEfisRight
 
 void OledMonitorPanel::updateDisplayFcuSpd(void)
@@ -635,7 +915,12 @@ void OledMonitorPanel::updateDisplayFcuSpd(void)
     int16_t labelY;
     if (fcuSpeedMode == 1) {
         labelText = "MACH";
-        labelY = 20;
+        // Was baseline 20, inherited from the original firmware. At 20 the
+        // label inks rows 12..20, and a digit cell's rectangle starts at
+        // row 16 - so redrawing the middle cell on its own cut a notch out
+        // of "MACH". 13 puts it on rows 5..13, clear of row 16, and lines it
+        // up with SPEED. No label baseline on an 18pt screen may pass 15.
+        labelY = 13;
         // MACH is always sent as x.xx (4 characters), so it is shown as-is.
         // The original firmware had a displayValue[4] write here that never had
         // any effect with Arduino String, and would corrupt the buffer if kept.
@@ -645,16 +930,33 @@ void OledMonitorPanel::updateDisplayFcuSpd(void)
     }
 
     if (fcuSpeedManagedMode == 1) {
+        // Managed dashes use a different font/x (and a dot) - not the cell
+        // layout, so this always takes the full repaint and never touches
+        // the shadow.
         renderLabelValue(TCA9548A_CHANNEL_FCU_SPD,
                           labelText, labelY, &FreeSans6pt7b,
                           "---", 26, 55, &DSEG7Classic_Regular16pt7b,
                           true, 104, 40);
-    } else {
-        renderLabelValue(TCA9548A_CHANNEL_FCU_SPD,
-                          labelText, labelY, &FreeSans6pt7b,
-                          displayValue, 21, 55, &DSEG7Classic_Regular18pt7b,
-                          false, 0, 0);
+        return;
     }
+
+    // bit0: fcuSpeedMode - the label text (SPEED vs MACH) this screen draws.
+    // Like SCR_EFIS_LEFT, MACH's value is "x.xx" (4 chars, see the identical
+    // comment above); cells[] below drops the '.' to get 3 cells.
+    uint8_t sig = 0x80 | (fcuSpeedMode ? 0x01 : 0x00);
+
+    // The '.' of a MACH value takes no cell, so it is dropped here; for
+    // SPEED there is nothing to drop and this is a plain copy.
+    char cells[4];
+    stripDot(cells, sizeof(cells), displayValue);
+
+    if (renderCells(SCR_FCU_SPD, cells, sig)) return;
+
+    renderLabelValue(TCA9548A_CHANNEL_FCU_SPD,
+                      labelText, labelY, &FreeSans6pt7b,
+                      displayValue, 21, 55, &DSEG7Classic_Regular18pt7b,
+                      false, 0, 0);
+    commitCells(SCR_FCU_SPD, cells, sig);
 }
 
 void OledMonitorPanel::updateDisplayFcuHdg(void)
@@ -680,18 +982,30 @@ void OledMonitorPanel::updateDisplayFcuHdg(void)
     }
 
     if (fcuHdgManagedMode == 1) {
+        // Managed dashes use a different font/x (and a dot) - not the cell
+        // layout, so this always takes the full repaint and never touches
+        // the shadow.
         renderLabelValue(TCA9548A_CHANNEL_FCU_HDG,
                           "HDG", 13, &FreeSans7pt7b,
                           "---", 28, 55, &DSEG7Classic_Regular15pt7b,
                           true, 104, 40);
-    } else {
-        char strHdgValue[4];
-        padLeft(strHdgValue, 3, fcuHdgValue);
-        renderLabelValue(TCA9548A_CHANNEL_FCU_HDG,
-                          "HDG", 13, &FreeSans7pt7b,
-                          strHdgValue, 21, 55, &DSEG7Classic_Regular18pt7b,
-                          false, 0, 0);
+        return;
     }
+
+    char strHdgValue[4];
+    padLeft(strHdgValue, 3, fcuHdgValue);
+
+    // Only the managed branch above changes this screen's layout, and it
+    // already returned - nothing else to fold into the signature.
+    uint8_t sig = 0x80;
+
+    if (renderCells(SCR_FCU_HDG, strHdgValue, sig)) return;
+
+    renderLabelValue(TCA9548A_CHANNEL_FCU_HDG,
+                      "HDG", 13, &FreeSans7pt7b,
+                      strHdgValue, 21, 55, &DSEG7Classic_Regular18pt7b,
+                      false, 0, 0);
+    commitCells(SCR_FCU_HDG, strHdgValue, sig);
 }
 
 void OledMonitorPanel::updateDisplayFcuFpa(void)
@@ -702,35 +1016,66 @@ void OledMonitorPanel::updateDisplayFcuFpa(void)
     char strAltValue2[5];
 
     if (lightTestOn == 1) {
+        // Light test reuses this screen's normal layout (only the digits
+        // differ), but every other screen skips the partial path during
+        // light test, so do the same here for consistency and leave the
+        // shadow invalid.
         copyValue(strAltValue2, sizeof(strAltValue2), "8888");
-    } else {
-        // Radio altimeter reads 0..2500 ft; anything above is out of range.
-        padLeftRanged(strAltValue2, 4, efisRightBaroValueHg, 0, 2500);
+        renderLabelValue(TCA9548A_CHANNEL_FCU_FPA,
+                          "RADIO ALT", 15, &FreeSans7pt7b,
+                          strAltValue2, 6, 55, &DSEG7Classic_Regular18pt7b,
+                          false, 0, 0);
+        return;
     }
 
+    // Radio altimeter reads 0..2500 ft; anything above is out of range and
+    // shown as dashes - same font/x as real digits, so still an ordinary
+    // cell string. No other branch in this screen, so sig carries no bits.
+    padLeftRanged(strAltValue2, 4, efisRightBaroValueHg, 0, 2500);
+    uint8_t sig = 0x80;
+
+    if (renderCells(SCR_FCU_FPA, strAltValue2, sig)) return;
+
+    // Baseline 15, not 16: at 16 the label inked row 16, which is the first
+    // row of every digit cell rectangle on this screen. See cellGeomTable.
     renderLabelValue(TCA9548A_CHANNEL_FCU_FPA,
-                      "RADIO ALT", 16, &FreeSans7pt7b,
+                      "RADIO ALT", 15, &FreeSans7pt7b,
                       strAltValue2, 6, 55, &DSEG7Classic_Regular18pt7b,
                       false, 0, 0);
+    commitCells(SCR_FCU_FPA, strAltValue2, sig);
 }
 
 void OledMonitorPanel::updateDisplayFcuAlt(void)
 {
     char strAltValue[6];
-    bool drawDot;
 
     if (lightTestOn == 1) {
         copyValue(strAltValue, sizeof(strAltValue), "88888");
-        drawDot = true;
-    } else {
-        padLeft(strAltValue, 5, fcuAltValue);
-        drawDot = (fcuAltManagedMode == 1);
+        renderLabelValue(TCA9548A_CHANNEL_FCU_ALT,
+                          "ALT", 15, &FreeSans8pt7b,
+                          strAltValue, 1, 55, &DSEG7Classic_Regular16pt7b,
+                          true, 124, 39);
+        return;
     }
+
+    padLeft(strAltValue, 5, fcuAltValue);
+    bool drawDot = (fcuAltManagedMode == 1);
+
+    // bit0: the managed dot at (124, 39). Unlike the other screens, managed
+    // mode here does not move the digits to a different font/x - it only
+    // adds the dot, which sits outside every cell blit rectangle (the last
+    // one ends at column 123). renderCells() would never redraw that dot on
+    // its own, so its state has to live in sig to force a full repaint when
+    // it toggles.
+    uint8_t sig = 0x80 | (drawDot ? 0x01 : 0x00);
+
+    if (renderCells(SCR_FCU_ALT, strAltValue, sig)) return;
 
     renderLabelValue(TCA9548A_CHANNEL_FCU_ALT,
                       "ALT", 15, &FreeSans8pt7b,
                       strAltValue, 1, 55, &DSEG7Classic_Regular16pt7b,
                       drawDot, 124, 39);
+    commitCells(SCR_FCU_ALT, strAltValue, sig);
 } // updateDisplayFcuAlt
 
 void OledMonitorPanel::updateDisplayFcuVs(void)

@@ -46,6 +46,17 @@ private:
     uint8_t       _dirty;
     OLEDInterface *oled;
 
+    // Baseline (pixel row) every DSEG7 digit cell on this panel is drawn on.
+    // Fixed by the physical layout, not per-call - so it is a constant, not
+    // a parameter.
+    static const uint8_t DIGIT_BASELINE_Y = 55;
+
+    // Partial-redraw shadow state - what is currently sitting in the
+    // framebuffer for each screen, so renderCells() only has to touch the
+    // digit cells that actually changed. See renderCells()/commitCells().
+    char    _shadow[SCR_COUNT][6];    // digit characters as last drawn, NUL-terminated
+    uint8_t _shadowSig[SCR_COUNT];    // layout signature of what is on screen; 0 = unknown
+
     void setTCAChannel(byte i);
     void blankAllDisplays(void);
     void renderScreen(uint8_t scr);
@@ -54,6 +65,11 @@ private:
                            const char *labelText, int16_t labelY, const GFXfont *labelFont,
                            const char *valueText, int16_t valueX, int16_t valueY, const GFXfont *valueFont,
                            bool drawDot, int16_t dotX, int16_t dotY);
+    void fastDrawDigit(uint8_t cursorX, uint8_t page0, uint8_t pages,
+                        const GFXfont *font, char c);
+    void clearCell(uint8_t blitX, uint8_t page0, uint8_t pages, uint8_t blitW);
+    bool renderCells(uint8_t scr, const char *cells, uint8_t sig);
+    void commitCells(uint8_t scr, const char *cells, uint8_t sig);
     void updateDisplayEfisLeft(void);
     void updateDisplayEfisRight(void);
     void updateDisplayFcuSpd(void);
