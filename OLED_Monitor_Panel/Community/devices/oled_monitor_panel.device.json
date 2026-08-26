@@ -1,103 +1,127 @@
 {
-    "$schema": "./mfdevice.schema.json",
-    "Info": {
-      "Label": "OLED Monitor Panel",
-      "Type": "OLED_MONITOR_PANEL",
-      "Author": "Gagagu/elral/Ernesto",
-      "URL": "https://github.com",
-      "Version" : "1.0.3"
+  "$schema": "./mfdevice.schema.json",
+  "Info": {
+    "Label": "OLED Monitor Panel",
+    "Type": "OLED_MONITOR_PANEL",
+    "Author": "Gagagu/elral/Ernesto",
+    "URL": "https://github.com",
+    "Version": "1.0.4"
+  },
+  "Config": {
+    "Pins": [],
+    "I2C": {
+      "Enabled": true,
+      "Addresses": [
+        "0x70",
+        "0x71"
+      ]
+    }
+  },
+  "MessageTypes": [
+    {
+      "id": 0,
+      "label": "Efis Left Baro Select",
+      "description": "$ inHg=0, hPa=1  (kept for numbering; firmware ignores it)"
     },
-    "Config": {
-      "Pins": [],
-      "I2C": {
-        "Enabled": true,
-        "Addresses": [
-          "0x70",
-          "0x71"
-        ]
-      }
+    {
+      "id": 1,
+      "label": "Efis Left Baro Value Hpa",
+      "description": "$ value  (kept for numbering; firmware ignores it)"
     },
-    "MessageTypes": [
-      {
-        "id": 2,
-        "label": "MACH",
-        "description": "$ value without dot"
-      },
-      {
-        "id": 5,
-        "label": "VOR DME",
-        "description": "$ value"
-      },
-      {
-        "id": 6,
-        "label": "Radio altimeter",
-        "description": "$ value without dot"
-      },
-      {
-        "id": 8,
-        "label": "Fcu Speed Value",
-        "description": "$"
-      },
-      {
-        "id": 9,
-        "label": "Fcu Speed Managed",
-        "description": "$ 0 = No; 1 = Yes"
-      },
-      {
-        "id": 10,
-        "label": "Fcu Hdg Value",
-        "description": "$"
-      },
-      {
-        "id": 11,
-        "label": "Fcu Hdg Managed",
-        "description": "$ 0 = No; 1 = Yes"
-      },
-      {
-        "id": 12,
-        "label": "Fcu Trk Mode",
-        "description": "$ 0 = V/S mode; 1 = FPA mode"
-      },
-	    {
-        "id": 13,
-        "label": "Fcu Alt Value",
-        "description": "$"
-      },
-	    {
-        "id": 14,
-        "label": "Fcu Alt Managed",
-        "description": "$ 0 = No; 1 = Yes"
-      },
-	    {
-        "id": 15,
-        "label": "Fcu VS Value VS",
-        "description": "$"
-      },
-	    {
-        "id": 16,
-        "label": "Fcu VS Value FPA",
-        "description": "$"
-      },
-	    {
-        "id": 17,
-        "label": "Fcu VS Managed",
-        "description": "$ 0 = No; 1 = Yes"
-      },
-	    {
-        "id": 18,
-        "label": "Speed/Mach Mode",
-        "description": "$ 0 = Speed Mode; 1 = Mach mode"
-      },
-	    {
-        "id": 19,
-        "label": "Light Test",
-        "description": "$ 0 = Light Test OFF; 1 = Light Test ON"
-      },
-	  {
-        "id": 20,
-        "label": "HSI CRS",
-        "description": "$"
-      }
-    ]
-  }
-  
+    {
+      "id": 2,
+      "label": "MACH",
+      "description": "$ value without dot"
+    },
+    {
+      "id": 3,
+      "label": "Efis Left Baro Mode",
+      "description": "$ 0 = QFE; 1 = QNH; 2 = STD  (kept for numbering; firmware ignores it)"
+    },
+    {
+      "id": 4,
+      "label": "Efis Right Baro Select",
+      "description": "$ inHg=0, hPa=1  (kept for numbering; firmware ignores it)"
+    },
+    {
+      "id": 5,
+      "label": "VOR DME",
+      "description": "$ value"
+    },
+    {
+      "id": 6,
+      "label": "Radio altimeter",
+      "description": "$ value without dot"
+    },
+    {
+      "id": 7,
+      "label": "Efis Right Baro Mode",
+      "description": "$ 0 = QFE; 1 = QNH; 2 = STD  (kept for numbering; firmware ignores it)"
+    },
+    {
+      "id": 8,
+      "label": "Fcu Speed Value",
+      "description": "$"
+    },
+    {
+      "id": 9,
+      "label": "Fcu Speed Managed",
+      "description": "$ 0 = No; 1 = Yes"
+    },
+    {
+      "id": 10,
+      "label": "Fcu Hdg Value",
+      "description": "$"
+    },
+    {
+      "id": 11,
+      "label": "Fcu Hdg Managed",
+      "description": "$ 0 = No; 1 = Yes"
+    },
+    {
+      "id": 12,
+      "label": "Fcu Trk Mode",
+      "description": "$ 0 = V/S mode; 1 = FPA mode"
+    },
+    {
+      "id": 13,
+      "label": "Fcu Alt Value",
+      "description": "$"
+    },
+    {
+      "id": 14,
+      "label": "Fcu Alt Managed",
+      "description": "$ 0 = No; 1 = Yes"
+    },
+    {
+      "id": 15,
+      "label": "Fcu VS Value VS",
+      "description": "$"
+    },
+    {
+      "id": 16,
+      "label": "Fcu VS Value FPA",
+      "description": "$"
+    },
+    {
+      "id": 17,
+      "label": "Fcu VS Managed",
+      "description": "$ 0 = No; 1 = Yes"
+    },
+    {
+      "id": 18,
+      "label": "Speed/Mach Mode",
+      "description": "$ 0 = Speed Mode; 1 = Mach mode"
+    },
+    {
+      "id": 19,
+      "label": "Light Test",
+      "description": "$ 0 = Light Test OFF; 1 = Light Test ON"
+    },
+    {
+      "id": 20,
+      "label": "HSI CRS",
+      "description": "$"
+    }
+  ]
+}
