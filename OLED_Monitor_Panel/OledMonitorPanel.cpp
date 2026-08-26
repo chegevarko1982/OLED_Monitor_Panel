@@ -427,6 +427,13 @@ Has to be redone, only tests
   anything longer drifted right - "VOR DME" is 63 px wide and ended up hard
   against the right edge, and "RADIO ALT" sat well left of centre. Measuring
   the string means a label can be renamed without re-tuning a magic x.
+
+  Deliberately NOT used for the DSEG7 values. That font is monospaced but
+  its ink is not: '1' is 3 px wide and sits at the right of its 29 px cell,
+  while '0' is 22 px wide. Measuring the ink would centre "100" 19 px away
+  from where it centres "000", so the digits would jump sideways as the
+  value changed. Value x stays a per-screen constant, derived once from
+  cell width x digit count.
 */
 void OledMonitorPanel::printCentered(const char *text, int16_t y)
 {
@@ -489,7 +496,7 @@ void OledMonitorPanel::updateDisplayAux(void) // добавил 8й экран
     padLeft(strHdgValue5, 3, CRSValue);
     renderLabelValue(TCA9548A_CHANNEL_Aux,
                       "CRS", 13, &FreeSans7pt7b,
-                      strHdgValue5, 20, 55, &DSEG7Classic_Regular18pt7b,
+                      strHdgValue5, 21, 55, &DSEG7Classic_Regular18pt7b,
                       false, 0, 0);
 }
 
@@ -531,12 +538,12 @@ void OledMonitorPanel::updateDisplayEfisLeft(void)
     if (fcuSpeedManagedMode == 1) {
         renderLabelValue(TCA9548A_CHANNEL_EFIS_LEFT,
                           labelText, 13, &FreeSans6pt7b,
-                          "---", 28, 55, &DSEG7Classic_Regular16pt7b,
+                          "---", 26, 55, &DSEG7Classic_Regular16pt7b,
                           true, 104, 40);
     } else {
         renderLabelValue(TCA9548A_CHANNEL_EFIS_LEFT,
                           labelText, 13, &FreeSans6pt7b,
-                          displayValue, 20, 55, &DSEG7Classic_Regular18pt7b,
+                          displayValue, 21, 55, &DSEG7Classic_Regular18pt7b,
                           false, 0, 0);
     }
 } // updateDisplayEfisLeft
@@ -567,7 +574,7 @@ void OledMonitorPanel::updateDisplayEfisRight(void)
     padLeft(strHdgValue3, 3, efisRightBaroValueHpa);
     renderLabelValue(TCA9548A_CHANNEL_EFIS_RIGHT,
                       "VOR DME", 13, &FreeSans7pt7b,
-                      strHdgValue3, 20, 55, &DSEG7Classic_Regular18pt7b,
+                      strHdgValue3, 21, 55, &DSEG7Classic_Regular18pt7b,
                       false, 0, 0);
 } // updateDisplayEfisRight
 
@@ -610,12 +617,12 @@ void OledMonitorPanel::updateDisplayFcuSpd(void)
     if (fcuSpeedManagedMode == 1) {
         renderLabelValue(TCA9548A_CHANNEL_FCU_SPD,
                           labelText, labelY, &FreeSans6pt7b,
-                          "---", 28, 55, &DSEG7Classic_Regular16pt7b,
+                          "---", 26, 55, &DSEG7Classic_Regular16pt7b,
                           true, 104, 40);
     } else {
         renderLabelValue(TCA9548A_CHANNEL_FCU_SPD,
                           labelText, labelY, &FreeSans6pt7b,
-                          displayValue, 28, 55, &DSEG7Classic_Regular18pt7b,
+                          displayValue, 21, 55, &DSEG7Classic_Regular18pt7b,
                           false, 0, 0);
     }
 }
@@ -652,7 +659,7 @@ void OledMonitorPanel::updateDisplayFcuHdg(void)
         padLeft(strHdgValue, 3, fcuHdgValue);
         renderLabelValue(TCA9548A_CHANNEL_FCU_HDG,
                           "HDG", 13, &FreeSans7pt7b,
-                          strHdgValue, 20, 55, &DSEG7Classic_Regular18pt7b,
+                          strHdgValue, 21, 55, &DSEG7Classic_Regular18pt7b,
                           false, 0, 0);
     }
 }
@@ -669,7 +676,7 @@ void OledMonitorPanel::updateDisplayFcuFpa(void)
 
     renderLabelValue(TCA9548A_CHANNEL_FCU_FPA,
                       "RADIO ALT", 16, &FreeSans7pt7b,
-                      strAltValue2, 0, 55, &DSEG7Classic_Regular16pt7b,
+                      strAltValue2, 1, 55, &DSEG7Classic_Regular16pt7b,
                       false, 0, 0);
 }
 
