@@ -55,7 +55,7 @@ bool MFCustomDevice::getStringFromMem(uint16_t addrMem, char *buffer, bool confi
 
 /* **********************************************************************************
     Helpers for the optional "Additional Config" string of the custom device.
-    Syntax: ANIM=<RA|DME|MACH|SPD|HDG|ALT|CRS|ALL|OFF>[+...]|FRAMES=<2..8>
+    Syntax: ANIM=<RA|DME|MACH|SPD|HDG|ALT|VS|CRS|ALL|OFF>[+...]|FRAMES=<2..8>
     Key order does not matter, keys and values are case insensitive.
     An empty or absent config string means animation off.
 
@@ -119,6 +119,8 @@ static bool parseAnimList(char *list, uint8_t *mask)
             *mask |= ANIM_HDG;
         else if (strcasecmp_P(token, PSTR("ALT")) == 0)
             *mask |= ANIM_ALT;
+        else if (strcasecmp_P(token, PSTR("VS")) == 0)
+            *mask |= ANIM_VS;
         else if (strcasecmp_P(token, PSTR("CRS")) == 0)
             *mask |= ANIM_CRS;
         else if (strcasecmp_P(token, PSTR("ALL")) == 0)

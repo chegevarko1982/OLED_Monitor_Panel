@@ -264,9 +264,12 @@ static const CellGeom cellGeomTable[] PROGMEM = {
     { TCA9548A_CHANNEL_FCU_FPA,     6, 29, 24, 2, 5, 4, 0 },
     // SCR_FCU_ALT
     { TCA9548A_CHANNEL_FCU_ALT,     1, 25, 21, 3, 4, 5, 1 },
-    // SCR_FCU_VS - no partial path for this screen, digits == 0 means
-    // renderCells() always defers to the full repaint.
-    { 0, 0, 0, 0, 0, 0, 0, 0 },
+    // SCR_FCU_VS - only the four digits are cells; the sign sits at columns
+    // 0..18, outside cell 0's rectangle (which starts at 26), so a cell
+    // redraw can never touch it. Its state rides in sig instead, the same way
+    // the ALT managed dot does. Measured: 15pt digits ink rows 27..55 inside
+    // the page-aligned 24..55, and the "V/S" label ends on row 20.
+    { TCA9548A_CHANNEL_FCU_VS,     24, 24, 20, 3, 4, 4, 2 },
     // SCR_AUX
     { TCA9548A_CHANNEL_Aux,        21, 29, 24, 2, 5, 3, 0 },
 };
@@ -286,6 +289,7 @@ static const GFXfont *fontForIndex(uint8_t fontIdx)
 {
     switch (fontIdx) {
     case 1:  return &DSEG7Classic_Regular16pt7b;
+    case 2:  return &DSEG7Classic_Regular15pt7b;
     default: return &DSEG7Classic_Regular18pt7b;
     }
 }
@@ -784,7 +788,7 @@ void OledMonitorPanel::clearCell(uint8_t blitX, uint8_t page0, uint8_t pages, ui
   layout signature `sig` does not match what commitCells() last recorded
   for this screen (mode change, label change, different font - anything
   that moved something renderCells() does not know how to erase), or this
-  screen has no cell geometry at all (SCR_FCU_VS).
+  screen has no cell geometry at all.
 
   `cells` must be a NUL-terminated string of exactly geom.digits characters,
   one per cell, left to right. `sig` must be non-zero - 0 is reserved to
@@ -798,7 +802,7 @@ bool OledMonitorPanel::renderCells(uint8_t scr, const char *cells, uint8_t sig)
     CellGeom geom;
     memcpy_P(&geom, &cellGeomTable[scr], sizeof(CellGeom));
 
-    if (geom.digits == 0) return false;        // this screen has no partial path (SCR_FCU_VS)
+    if (geom.digits == 0) return false;        // this screen has no partial path
     if (sig == 0) return false;
     if (_shadowSig[scr] != sig) return false;   // layout on screen does not match - need a full repaint
     if (strlen(cells) != geom.digits) return false;
@@ -1417,6 +1421,36 @@ void OledMonitorPanel::updateDisplayFcuVs(void)
 {
     char strVrValue[8] = "0000";
 
+    /*
+      In V/S mode with a selected value this screen is four digit cells at a
+      fixed pitch, so it takes the same partial path as every other screen.
+      FPA mode, managed dashes and light test each lay it out differently and
+      keep the full repaint - vsCells says which of the two this call is.
+
+      The digits are drawn at x = 24 under both signs. That is not a change:
+      the negative branch used to print "-" at x = 0 and let the cursor carry
+      on, and the 15pt '-' has an xAdvance of exactly 24. Setting the cursor
+      explicitly makes the two branches share one geometry deliberately
+      instead of by coincidence.
+    */
+    bool    vsCells = (lightTestOn != 1 && fcuVsManagedMode != 1 && fcuTrkMode == 0);
+    bool    neg     = false;
+    uint8_t sig     = 0;
+    char    cells[5];
+
+    if (vsCells) {
+        // A lone "-" is not a value; treat it as the zero the old code did.
+        neg = (fcuVsValue[0] == '-' && fcuVsValue[1] != 0x00);
+        padLeft(cells, 4, neg ? fcuVsValue + 1 : fcuVsValue);
+
+        // bit0: the sign. It lies outside every cell rectangle, so a change of
+        // sign has to force the full repaint from here.
+        sig = 0x80 | (neg ? 0x01 : 0x00);
+
+        if (slideCells(SCR_FCU_VS, cells, sig)) return;
+        if (renderCells(SCR_FCU_VS, cells, sig)) return;
+    }
+
     setTCAChannel(TCA9548A_CHANNEL_FCU_VS);
 
     // Clear the buffer
@@ -1451,62 +1485,18 @@ void OledMonitorPanel::updateDisplayFcuVs(void)
             oled->print("-----");
         } else {
             if (fcuTrkMode == 0) {
-                if (fcuVsValue[1] == '\0') {
+                if (neg) {
+                    oled->setFont(&DSEG7Classic_Regular15pt7b);
+                    oled->setCursor(0, 55);
+                    oled->print("-");
+                } else {
                     oled->setFont(&FreeSans18pt7b);
                     oled->setCursor(0, 50);
                     oled->print("+");
-
-                    strVrValue[0] = '0';
-                    strVrValue[1] = '0';
-                    strVrValue[2] = '0';
-                    strVrValue[3] = '0';
-                    strVrValue[4] = '\0';
-
-                    oled->setFont(&DSEG7Classic_Regular15pt7b);
-                    oled->setCursor(24, 55);
-                    oled->print(strVrValue);
-                } else {
-                    if (fcuVsValue[0] == '-') {
-                        oled->setFont(&DSEG7Classic_Regular15pt7b);
-                        oled->setCursor(0, 55);
-                        oled->print("-");
-
-                        if (fcuVsValue[4] == '\0') {
-                            strVrValue[0] = '0';
-                            strVrValue[1] = fcuVsValue[1];
-                            strVrValue[2] = fcuVsValue[2];
-                            strVrValue[3] = fcuVsValue[3];
-                        } else {
-                            strVrValue[0] = fcuVsValue[1];
-                            strVrValue[1] = fcuVsValue[2];
-                            strVrValue[2] = fcuVsValue[3];
-                            strVrValue[3] = fcuVsValue[4];
-                        }
-                        strVrValue[4] = '\0';
-                        oled->print(strVrValue);
-                    } else {
-                        oled->setFont(&FreeSans18pt7b);
-                        oled->setCursor(0, 50);
-                        oled->print("+");
-
-                        if (fcuVsValue[3] == '\0') {
-                            strVrValue[0] = '0';
-                            strVrValue[1] = fcuVsValue[0];
-                            strVrValue[2] = fcuVsValue[1];
-                            strVrValue[3] = fcuVsValue[2];
-                        } else {
-                            strVrValue[0] = fcuVsValue[0];
-                            strVrValue[1] = fcuVsValue[1];
-                            strVrValue[2] = fcuVsValue[2];
-                            strVrValue[3] = fcuVsValue[3];
-                        }
-                        strVrValue[4] = '\0';
-
-                        oled->setFont(&DSEG7Classic_Regular15pt7b);
-                        oled->setCursor(24, 55);
-                        oled->print(strVrValue);
-                    }
                 }
+                oled->setFont(&DSEG7Classic_Regular15pt7b);
+                oled->setCursor(24, 55);
+                oled->print(cells);
             } else {
                 if (fcuVsValueFpa[0] == '-') {
                     oled->setFont(&DSEG7Classic_Regular15pt7b);
@@ -1544,4 +1534,9 @@ void OledMonitorPanel::updateDisplayFcuVs(void)
         }
     }
     oled->display();
+
+    if (vsCells)
+        commitCells(SCR_FCU_VS, cells, sig);
+    else
+        _shadowSig[SCR_FCU_VS] = 0; // light test / managed / FPA - see updateDisplayAux()
 }

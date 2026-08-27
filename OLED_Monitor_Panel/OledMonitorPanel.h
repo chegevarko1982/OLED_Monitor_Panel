@@ -42,12 +42,12 @@ enum : uint8_t {
 #define ANIM_HDG        (1 << SCR_FCU_HDG)
 #define ANIM_RADIO_ALT  (1 << SCR_FCU_FPA)
 #define ANIM_ALT        (1 << SCR_FCU_ALT)
+#define ANIM_VS         (1 << SCR_FCU_VS)
 #define ANIM_CRS        (1 << SCR_AUX)
 
-// Every screen, and it can safely be every bit: SCR_FCU_VS is the one screen
-// with no cell geometry, and slideCells() refuses it on geom.digits == 0 the
-// same way renderCells() does. So this does not have to be kept in step with
-// the table by hand.
+// Every screen. Safe as a plain 0xFF: slideCells() refuses any screen whose
+// cellGeomTable entry has digits == 0, the same way renderCells() does, so a
+// screen that grows or loses a cell layout needs no edit here.
 #define ANIM_ALL        0xFF
 
 // Frame count bounds accepted from the Config string, and the default when
