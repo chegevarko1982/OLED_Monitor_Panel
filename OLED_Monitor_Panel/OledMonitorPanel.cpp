@@ -1096,13 +1096,28 @@ void OledMonitorPanel::drumStep(void)
     uint8_t blitX   = cursorX + 2;
 
     setTCAChannel(geom.channel);
+    /*
+      Which way the drum face travels, which is not the same question as which
+      way the number is going.
+
+      On a real instrument the wheel is read from the front, so counting up
+      brings the next digit DOWN into view from above and pushes the current
+      one out of the bottom. This drew it the other way round - the outgoing
+      digit left through the top - which reads as counting down while the
+      number counts up.
+
+      So the digit the wheel is leaving moves with +off, and its successor
+      enters a full cell height above it. Counting down mirrors on its own:
+      there the wheel runs backwards through the same positions, so the
+      outgoing digit leaves through the top, which is again what the drum does.
+    */
     clearCell(blitX, geom.page0, geom.pages, geom.blitW);
-    fastDrawDigit(cursorX, geom.page0, geom.pages, font, (char)('0' + d0), -(int16_t)off);
+    fastDrawDigit(cursorX, geom.page0, geom.pages, font, (char)('0' + d0), (int16_t)off);
     // At frac == 0 the follower sits a whole cell height away and would write
     // nothing, so skip its ~1.2 ms rather than rasterise it into the clip test.
     if (frac)
         fastDrawDigit(cursorX, geom.page0, geom.pages, font,
-                      (char)('0' + (d0 + 1) % DRUM_DIGITS), (int16_t)(h - off));
+                      (char)('0' + (d0 + 1) % DRUM_DIGITS), (int16_t)off - (int16_t)h);
     oled->displayRegion(blitX, geom.page0, geom.blitW, geom.pages);
 
     if (settling) {
@@ -1390,6 +1405,20 @@ void OledMonitorPanel::updateDisplayEfisLeft(void)
         labelText = "SPEED";
         copyValue(displayValue, sizeof(displayValue), efisLeftBaroValueHg);
         stripDot(cells, sizeof(cells), displayValue);
+
+    // Below 100 the sim sends two characters. A two-cell string matches
+    // neither the three-cell geometry nor the shadow, so the wheel and the
+    // partial redraw both refused it and the screen fell back to a full
+    // repaint - which is the snap. Padding also fixes a second thing that was
+    // wrong without animation: at two characters the value was drawn from the
+    // left edge of the field, so 100 -> 99 shifted the digits one place
+    // sideways instead of just changing them.
+    if (strlen(cells) < 3) {
+        char narrow[4];
+        copyValue(narrow, sizeof(narrow), cells);
+        padLeft(cells, 3, narrow);
+        copyValue(displayValue, sizeof(displayValue), cells);
+    }
     }
 
     if (fcuSpeedManagedMode == 1) {
@@ -1503,6 +1532,20 @@ void OledMonitorPanel::updateDisplayFcuSpd(void)
         labelY = 13;
         copyValue(displayValue, sizeof(displayValue), fcuSpeedValue);
         stripDot(cells, sizeof(cells), displayValue);
+
+    // Below 100 the sim sends two characters. A two-cell string matches
+    // neither the three-cell geometry nor the shadow, so the wheel and the
+    // partial redraw both refused it and the screen fell back to a full
+    // repaint - which is the snap. Padding also fixes a second thing that was
+    // wrong without animation: at two characters the value was drawn from the
+    // left edge of the field, so 100 -> 99 shifted the digits one place
+    // sideways instead of just changing them.
+    if (strlen(cells) < 3) {
+        char narrow[4];
+        copyValue(narrow, sizeof(narrow), cells);
+        padLeft(cells, 3, narrow);
+        copyValue(displayValue, sizeof(displayValue), cells);
+    }
     }
 
     if (fcuSpeedManagedMode == 1) {
@@ -1596,7 +1639,7 @@ void OledMonitorPanel::updateDisplayFcuFpa(void)
         copyValue(strAltValue2, sizeof(strAltValue2), "8888");
         _shadowSig[SCR_FCU_FPA] = 0; // test pattern on screen - see updateDisplayAux()
         renderLabelValue(TCA9548A_CHANNEL_FCU_FPA,
-                          "RADIO ALT", 15, &FreeSans7pt7b,
+                          "RADIO ALT", 11, &FreeSans7pt7b,
                           strAltValue2, 6, 55, &DSEG7Classic_Regular18pt7b,
                           false, 0, 0);
         return;
@@ -1613,10 +1656,24 @@ void OledMonitorPanel::updateDisplayFcuFpa(void)
     if (slideCells(SCR_FCU_FPA, strAltValue2, sig)) return;
     if (renderCells(SCR_FCU_FPA, strAltValue2, sig)) return;
 
-    // Baseline 15, not 16: at 16 the label inked row 16, which is the first
-    // row of every digit cell rectangle on this screen. See cellGeomTable.
+    /*
+      Baseline 11, and the four rows matter.
+
+      A cell is five whole pages, rows 16..55, because that is the unit the
+      framebuffer is addressed in. A resting 18pt digit only inks rows 21..55,
+      so at rest the top five rows of the cell are always blank and the label
+      appears to have clearance it does not have. A rolling digit uses them -
+      it has to, since it travels the full cell height to leave - and at
+      baseline 15 the label inked right up to row 15, so every roll put ink
+      hard against the lettering. That is the flicker on this screen.
+
+      11 puts the label on rows 2..11 and leaves rows 12..15 empty whatever the
+      wheels are doing. The other screens label at 13 and have two rows of
+      clearance; this one is the tightest because its label is the longest, so
+      it gets the most.
+    */
     renderLabelValue(TCA9548A_CHANNEL_FCU_FPA,
-                      "RADIO ALT", 15, &FreeSans7pt7b,
+                      "RADIO ALT", 11, &FreeSans7pt7b,
                       strAltValue2, 6, 55, &DSEG7Classic_Regular18pt7b,
                       false, 0, 0);
     commitCells(SCR_FCU_FPA, strAltValue2, sig);
