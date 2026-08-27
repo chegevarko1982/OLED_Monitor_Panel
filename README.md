@@ -68,20 +68,24 @@ A release ZIP is written to `_dist/` by `copy_fw_files.py`.
 ### Version numbers must line up
 
 `get_version.py` names the firmware `<env name>_<VERSION>.hex`, taking `VERSION` from the
-environment and falling back to `0.0.1`. MobiFlight looks for the file named by
-`FirmwareBaseName` + `LatestFirmwareVersion` from `board.json`.
+environment and falling back to `0.0.1`. MobiFlight looks for exactly the file named by
+`FirmwareBaseName` + `LatestFirmwareVersion` in `board.json`, so those two have to agree or the
+package installs and then fails to flash.
 
-So a plain local build produces `oled_monitor_panel_mega_0_0_1.hex` while the board files still
-declare `LatestFirmwareVersion: 0.9.2` — MobiFlight will not find the firmware. Either build with
-an explicit version:
+`board.json` declares `LatestFirmwareVersion: 1.0.0`, so a package meant for MobiFlight must be
+built with that version:
 
 ```
 VERSION=1.0.0 pio run -e oled_monitor_panel_mega
 ```
 
-and set `LatestFirmwareVersion` to `1.0.0` in both `board.json` files, or leave the version at
-`0.0.1` in the board files while testing locally. In a GitHub release build `VERSION` comes from
-the release tag automatically.
+A plain `pio run` produces `oled_monitor_panel_mega_0_0_1.hex`, which is fine for flashing over
+USB during development — MobiFlight is not involved — but is not a package you can install. In a
+GitHub release build `VERSION` comes from the release tag automatically.
+
+Only the Mega is shipped. There is no Pico build environment, so no Pico board file is included
+either: listing a board whose firmware is not in the package gets it as far as the flash button
+and no further.
 
 ## Installation
 

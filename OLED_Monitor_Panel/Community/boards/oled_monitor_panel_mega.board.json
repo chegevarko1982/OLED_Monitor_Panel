@@ -39,7 +39,7 @@
     "DelayAfterFirmwareUpdate": 0,
     "FirmwareBaseName": "oled_monitor_panel_mega",
     "FirmwareExtension": "hex",
-    "LatestFirmwareVersion": "0.9.2",
+    "LatestFirmwareVersion": "1.0.0",
     "FriendlyName": "OLED Monitor Panel (Mega)",
     "MobiFlightType": "OLED Monitor Panel Mega",
     "ResetFirmwareFile": "reset.arduino_mega_1_0_2.hex",
