@@ -1,11 +1,11 @@
 {
   "$schema": "./mfdevice.schema.json",
   "Info": {
-    "Label": "OLED Monitor Panel",
+    "Label": "OLED Panel",
     "Type": "OLED_MONITOR_PANEL",
     "Author": "Gagagu/elral/Ernesto",
     "URL": "https://github.com",
-    "Version": "1.0.5"
+    "Version": "1.0.6"
   },
   "Config": {
     "Pins": [],
