@@ -36,8 +36,19 @@ enum : uint8_t {
   string in the board settings; 0 (an empty Config string) means the panel
   behaves exactly as it did before animation existed.
 */
-#define ANIM_RADIO_ALT  (1 << SCR_FCU_FPA)
+#define ANIM_MACH       (1 << SCR_EFIS_LEFT)
 #define ANIM_VOR_DME    (1 << SCR_EFIS_RIGHT)
+#define ANIM_SPD        (1 << SCR_FCU_SPD)
+#define ANIM_HDG        (1 << SCR_FCU_HDG)
+#define ANIM_RADIO_ALT  (1 << SCR_FCU_FPA)
+#define ANIM_ALT        (1 << SCR_FCU_ALT)
+#define ANIM_CRS        (1 << SCR_AUX)
+
+// Every screen, and it can safely be every bit: SCR_FCU_VS is the one screen
+// with no cell geometry, and slideCells() refuses it on geom.digits == 0 the
+// same way renderCells() does. So this does not have to be kept in step with
+// the table by hand.
+#define ANIM_ALL        0xFF
 
 // Frame count bounds accepted from the Config string, and the default when
 // it names screens but no FRAMES=.

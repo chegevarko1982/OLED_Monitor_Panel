@@ -101,11 +101,18 @@ an **Additional Config** text field:
 | String | Effect |
 |---|---|
 | *(empty)* | animation off - the default, and what an already-configured board keeps |
-| `ANIM=RA+DME` | both screens, 4 frames |
+| `ANIM=RA+DME` | radio altimeter and DME, 4 frames |
 | `ANIM=RA` | radio altimeter only |
+| `ANIM=ALT+HDG+CRS` | any combination, joined with `+` |
 | `ANIM=RA\|FRAMES=6` | 6 frames instead of 4 |
-| `ANIM=ALL` | every screen that supports it |
+| `ANIM=ALL` | every screen |
 | `ANIM=OFF` | explicitly off |
+
+Screen names: `RA` radio altimeter, `DME` VOR DME, `MACH` the Mach/speed screen,
+`SPD` FCU speed, `HDG` FCU heading, `ALT` FCU altitude, `CRS` course, `ALL` all of
+them. V/S is the one screen with no name, because it has no fixed digit cells -
+its sign and digits move between fonts and positions with the V/S and FPA modes,
+so it takes a full repaint either way. `ALL` simply skips it.
 
 `FRAMES` is 2..8 at 25 ms per frame, so the default 4 gives a 100 ms roll. Keys
 and screen names are case insensitive and their order does not matter. A string

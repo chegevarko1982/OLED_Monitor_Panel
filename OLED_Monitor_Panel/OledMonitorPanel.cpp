@@ -131,16 +131,39 @@ static void padLeftRanged(char *dst, uint8_t width, const char *src, int16_t lo,
 */
 static void machValue(char *cells, char *shown, const char *src)
 {
-    const char *dot  = strchr(src, '.');
-    const char *frac = dot ? dot + 1 : src;
+    while (*src == ' ' || *src == '+') src++;
 
-    // Integer digit: the one just before the point, or '0' when the value
-    // carries no integer part (".5") and when there is no point at all.
-    cells[0] = (dot && dot != src) ? dot[-1] : '0';
+    const char *dot    = strchr(src, '.');
+    const char *intEnd = dot ? dot : src + strlen(src);
 
-    // Fraction, padded on the right to exactly two places.
-    cells[1] = frac[0] ? frac[0] : '0';
-    cells[2] = (frac[0] && frac[1]) ? frac[1] : '0';
+    // The value is read as an ordinary decimal number: "1" is one, not one
+    // tenth. The device.json description used to call this a value "without
+    // dot", inherited from the original project, and reading a dotless "1"
+    // as the fraction is what made Mach 1 show as 0.10.
+    const char *intStart = src;
+    while (intStart < intEnd && *intStart == '0') intStart++;   // leading zeros
+
+    bool ok = (intEnd - intStart) <= 1;                          // X.YZ has room for one
+    for (const char *p = src; ok && p < intEnd; p++)
+        if (*p < '0' || *p > '9') ok = false;
+
+    if (!ok) {
+        // Two or more integer digits cannot be drawn here at all. Dashes say
+        // so, in the same font at the same x as real digits, rather than
+        // quietly showing one digit of a number that is not the value.
+        cells[0] = cells[1] = cells[2] = '-';
+    } else {
+        cells[0] = (intStart < intEnd) ? *intStart : '0';
+
+        // Fraction, padded on the right to exactly two places.
+        const char *frac = dot ? dot + 1 : "";
+        cells[1] = '0';
+        cells[2] = '0';
+        if (frac[0] >= '0' && frac[0] <= '9') {
+            cells[1] = frac[0];
+            if (frac[1] >= '0' && frac[1] <= '9') cells[2] = frac[1];
+        }
+    }
     cells[3] = 0;
 
     shown[0] = cells[0];
@@ -1079,6 +1102,7 @@ void OledMonitorPanel::updateDisplayAux(void) // добавил 8й экран
     // mode, no label switch - so the signature carries no extra bits.
     uint8_t sig = 0x80;
 
+    if (slideCells(SCR_AUX, strHdgValue5, sig)) return;
     if (renderCells(SCR_AUX, strHdgValue5, sig)) return;
 
     renderLabelValue(TCA9548A_CHANNEL_Aux,
@@ -1140,6 +1164,7 @@ void OledMonitorPanel::updateDisplayEfisLeft(void)
     // second cell's rectangle starts at 52, so no cell redraw can erase it.
     uint8_t sig = 0x80 | (fcuSpeedMode ? 0x01 : 0x00);
 
+    if (slideCells(SCR_EFIS_LEFT, cells, sig)) return;
     if (renderCells(SCR_EFIS_LEFT, cells, sig)) return;
 
     renderLabelValue(TCA9548A_CHANNEL_EFIS_LEFT,
@@ -1252,6 +1277,7 @@ void OledMonitorPanel::updateDisplayFcuSpd(void)
     // second cell's rectangle starts at 52, so no cell redraw can erase it.
     uint8_t sig = 0x80 | (fcuSpeedMode ? 0x01 : 0x00);
 
+    if (slideCells(SCR_FCU_SPD, cells, sig)) return;
     if (renderCells(SCR_FCU_SPD, cells, sig)) return;
 
     renderLabelValue(TCA9548A_CHANNEL_FCU_SPD,
@@ -1302,6 +1328,7 @@ void OledMonitorPanel::updateDisplayFcuHdg(void)
     // already returned - nothing else to fold into the signature.
     uint8_t sig = 0x80;
 
+    if (slideCells(SCR_FCU_HDG, strHdgValue, sig)) return;
     if (renderCells(SCR_FCU_HDG, strHdgValue, sig)) return;
 
     renderLabelValue(TCA9548A_CHANNEL_FCU_HDG,
@@ -1376,6 +1403,7 @@ void OledMonitorPanel::updateDisplayFcuAlt(void)
     // it toggles.
     uint8_t sig = 0x80 | (drawDot ? 0x01 : 0x00);
 
+    if (slideCells(SCR_FCU_ALT, strAltValue, sig)) return;
     if (renderCells(SCR_FCU_ALT, strAltValue, sig)) return;
 
     renderLabelValue(TCA9548A_CHANNEL_FCU_ALT,

@@ -5,7 +5,7 @@
     "Type": "OLED_MONITOR_PANEL",
     "Author": "Gagagu/elral/Ernesto",
     "URL": "https://github.com",
-    "Version": "1.0.6"
+    "Version": "1.0.7"
   },
   "Config": {
     "Pins": [],
@@ -35,7 +35,7 @@
     {
       "id": 2,
       "label": "MACH",
-      "description": "$ value without dot"
+      "description": "$ Mach as a decimal number, e.g. 0.78 - shown as X.YZ"
     },
     {
       "id": 3,
