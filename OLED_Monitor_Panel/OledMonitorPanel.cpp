@@ -113,6 +113,39 @@ static void padLeftRanged(char *dst, uint8_t width, const char *src, int16_t lo,
 }
 
 /*
+  Normalises a MACH value into three digit cells and the string to draw.
+
+  MACH always reads x.xx on this panel, but what actually arrives depends on
+  how the MobiFlight profile is set up, and the three plausible forms do not
+  agree with each other:
+
+      "0.78"   the sim value straight through
+      "78"     what oled_monitor_panel.device.json documents for message 2
+      "0.5"    the profile rule "value < 100 -> 0.$" applied to a variable
+               already scaled by 100 - i.e. mach 0.05
+
+  Taking the decimal point from the string therefore cannot be right for all
+  of them. Stripping any '.' and zero-padding the digits to three makes every
+  form land on the same cells, and the point is drawn from here instead.
+
+  It also guarantees the three-character cell string renderCells() needs: a
+  shorter one fails its length check and silently falls back to a full
+  repaint on every single update.
+*/
+static void machValue(char *cells, char *shown, const char *src)
+{
+    char digits[8];
+    stripDot(digits, sizeof(digits), src);
+    padLeft(cells, 3, digits);
+
+    shown[0] = cells[0];
+    shown[1] = '.';
+    shown[2] = cells[1];
+    shown[3] = cells[2];
+    shown[4] = 0;
+}
+
+/*
   Right-pad dst (in place) with fill up to width chars, without exceeding
   dstSize - 1 chars. Used only on local display copies, never on the
   stored globals.
@@ -805,17 +838,17 @@ void OledMonitorPanel::updateDisplayEfisLeft(void)
         return;
     }
 
-    char displayValue[6];
-    copyValue(displayValue, sizeof(displayValue), efisLeftBaroValueHg);
-
+    char        displayValue[6];
+    char        cells[4];
     const char *labelText;
+
     if (fcuSpeedMode == 0) {
         labelText = "MACH";
-        // MACH is always sent as x.xx (4 characters), so it is shown as-is.
-        // The original firmware had a displayValue[4] write here that never had
-        // any effect with Arduino String, and would corrupt the buffer if kept.
+        machValue(cells, displayValue, efisLeftBaroValueHg);
     } else {
         labelText = "SPEED";
+        copyValue(displayValue, sizeof(displayValue), efisLeftBaroValueHg);
+        stripDot(cells, sizeof(cells), displayValue);
     }
 
     if (fcuSpeedManagedMode == 1) {
@@ -830,14 +863,9 @@ void OledMonitorPanel::updateDisplayEfisLeft(void)
     }
 
     // bit0: fcuSpeedMode - the label text (MACH vs SPEED) this screen draws.
-    // MACH's value is "x.xx" (4 chars); see cells[] below for why that is
-    // still a 3-character cell string.
+    // The MACH decimal point is not in sig: it sits on columns 48..51 and the
+    // second cell's rectangle starts at 52, so no cell redraw can erase it.
     uint8_t sig = 0x80 | (fcuSpeedMode ? 0x01 : 0x00);
-
-    // The '.' of a MACH value takes no cell, so it is dropped here; for
-    // SPEED there is nothing to drop and this is a plain copy.
-    char cells[4];
-    stripDot(cells, sizeof(cells), displayValue);
 
     if (renderCells(SCR_EFIS_LEFT, cells, sig)) return;
 
@@ -908,25 +936,25 @@ void OledMonitorPanel::updateDisplayFcuSpd(void)
         return;
     }
 
-    char displayValue[6];
-    copyValue(displayValue, sizeof(displayValue), fcuSpeedValue);
-
+    char        displayValue[6];
+    char        cells[4];
     const char *labelText;
-    int16_t labelY;
+    int16_t     labelY;
+
     if (fcuSpeedMode == 1) {
         labelText = "MACH";
+        machValue(cells, displayValue, fcuSpeedValue);
         // Was baseline 20, inherited from the original firmware. At 20 the
         // label inks rows 12..20, and a digit cell's rectangle starts at
         // row 16 - so redrawing the middle cell on its own cut a notch out
         // of "MACH". 13 puts it on rows 5..13, clear of row 16, and lines it
         // up with SPEED. No label baseline on an 18pt screen may pass 15.
         labelY = 13;
-        // MACH is always sent as x.xx (4 characters), so it is shown as-is.
-        // The original firmware had a displayValue[4] write here that never had
-        // any effect with Arduino String, and would corrupt the buffer if kept.
     } else {
         labelText = "SPEED";
         labelY = 13;
+        copyValue(displayValue, sizeof(displayValue), fcuSpeedValue);
+        stripDot(cells, sizeof(cells), displayValue);
     }
 
     if (fcuSpeedManagedMode == 1) {
@@ -941,14 +969,9 @@ void OledMonitorPanel::updateDisplayFcuSpd(void)
     }
 
     // bit0: fcuSpeedMode - the label text (SPEED vs MACH) this screen draws.
-    // Like SCR_EFIS_LEFT, MACH's value is "x.xx" (4 chars, see the identical
-    // comment above); cells[] below drops the '.' to get 3 cells.
+    // The MACH decimal point is not in sig: it inks columns 48..51 and the
+    // second cell's rectangle starts at 52, so no cell redraw can erase it.
     uint8_t sig = 0x80 | (fcuSpeedMode ? 0x01 : 0x00);
-
-    // The '.' of a MACH value takes no cell, so it is dropped here; for
-    // SPEED there is nothing to drop and this is a plain copy.
-    char cells[4];
-    stripDot(cells, sizeof(cells), displayValue);
 
     if (renderCells(SCR_FCU_SPD, cells, sig)) return;
 
