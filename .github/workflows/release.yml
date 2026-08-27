@@ -4,14 +4,20 @@ on:
   release:
     types: [published]
 
+# softprops/action-gh-release attaches the built ZIP to the release, which is a
+# write to repository contents. The default token is read-only, so without this
+# the build succeeds and the release ends up with no firmware attached.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Cache pip
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
@@ -19,7 +25,7 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Cache PlatformIO
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cache/pip
@@ -29,33 +35,32 @@ jobs:
             ${{ runner.os }}-pio-
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.11"
 
       - name: Install PlatformIO
         run: |
           python -m pip install --upgrade pip
           pip install --upgrade platformio
 
-      - name: Extract build version
-        id: get_version
-        uses: battila7/get-version-action@v2
-
       - name: Run PlatformIO
         env:
-          VERSION: ${{ steps.get_version.outputs.version-without-v }}
+          # The tag is the version. get_version.py strips the leading "v"
+          # itself, so "v1.0.0" here produces oled_monitor_panel_mega_1_0_0.hex
+          # - which is the name board.json tells MobiFlight to look for. This
+          # used to come from a third-party action; the tag was always right
+          # here for the taking.
+          VERSION: ${{ github.event.release.tag_name }}
         run: pio run
 
       - name: Archive production artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ZIP files
           path: ./_dist/*.zip
 
       - name: Release
-        uses: softprops/action-gh-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
           files: ./_dist/*.zip
