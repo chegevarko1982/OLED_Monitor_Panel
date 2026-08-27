@@ -189,21 +189,38 @@ static bool updateValue(char *dst, uint8_t dstSize, const char *src)
   Slide animation tuning, both straight off the bench numbers.
 
   One cell's slide frame - clear the rectangle, rasterise two glyphs into it,
-  push it once - measured 7.1 ms on this board. At a 25 ms frame period two
-  moving cells cost 14.3 ms and leave ~10 ms for serial RX and the encoders.
-  Three cells (21.4 ms) formally fit and leave no margin at all, so anything
-  moving more than two cells snaps instead of sliding.
+  push it once - measured 7.1 ms on this board. slideStep() draws exactly one
+  of them per call, so 7.1 ms is also the longest stretch this firmware blocks
+  serial for, whatever else is animating. At 115200 baud the 256-byte receive
+  buffer holds 22 ms, so that leaves a wide margin.
 
-  Two is not a compromise in practice: in a counter only the low digit moves
-  fast. Descending at 700 fpm the RADIO ALT units change every ~85 ms, the
-  tens every ~850 ms and the hundreds once every 8.5 s, so two cells only ever
-  move together across a carry.
+  The 12 ms period follows from it: 7.1 of 12 ms is 59 % duty, and 8 frames
+  then span 96 ms - the same roll duration the old 4 frames of 25 ms gave, in
+  steps a quarter the size. A shorter period would not fit one cell.
+
+  ANIM_MAX_CELLS still caps how many digits may move in one transition. It is
+  not a time budget any more (the cells are spread across frames), it is a
+  judgement: a step small enough to read as a roll moves one or two digits,
+  and 300 -> 299 should click over rather than crawl.
 */
-#define ANIM_FRAME_MS  25
+#define ANIM_FRAME_MS  12
 #define ANIM_MAX_CELLS 2
 
-// _slideScr when nothing is animating.
-static const uint8_t SLIDE_IDLE = 0xFF;
+/*
+  How many digit cells may be rolling at once across the whole panel.
+
+  This is the hard ceiling, and it is arithmetic rather than taste. One cell
+  frame costs 7.1 ms and slideStep() draws one per frame period, so N cells
+  rolling for F frames take N * F * ANIM_FRAME_MS of wall clock. Holding an
+  8-frame roll near 100 ms therefore allows N * 8 * 7.1 <= 100, i.e. N <= 1.7.
+
+  Two is the practical setting: one cell rolls in 96 ms, two share the frames
+  and take ~192 ms, and a third would push every roll past the point where the
+  sim has already sent the next value. Screens beyond the cap snap through
+  renderCells() - the same thing that used to happen to every screen but the
+  first, now only under genuine load.
+*/
+#define ANIM_CELLS_IN_FLIGHT 2
 
 /*
   Marker written into _shadow[] for a cell whose content is no longer known -
@@ -301,8 +318,10 @@ OledMonitorPanel::OledMonitorPanel()
     _dirty = 0;
     _animMask = 0;
     _animFrames = ANIM_FRAMES_DEFAULT;
-    _slideScr = SLIDE_IDLE;
-    _slideMask = 0;
+    _slideActive = 0;
+    _slideCursor = 0;
+    _slideUp     = 0;
+    memset(_slidePending, 0, sizeof(_slidePending));
     // Nothing has been drawn yet, so no shadow describes any screen. The
     // device pool this object is placement-new'd into happens to be zeroed,
     // but renderCells() correctness should not rest on that.
@@ -319,7 +338,7 @@ void OledMonitorPanel::attach(uint8_t addrI2C, uint8_t animMask, uint8_t frames)
     _animFrames = frames < ANIM_FRAMES_MIN ? ANIM_FRAMES_MIN
                 : frames > ANIM_FRAMES_MAX ? ANIM_FRAMES_MAX
                                            : frames;
-    _slideScr   = SLIDE_IDLE;
+    _slideActive = 0;
     Wire.begin();
     Wire.setClock(400000);
     if (!FitInMemory(sizeof(OLEDInterface))) {
@@ -403,8 +422,8 @@ void OledMonitorPanel::begin()
     updateDisplayAux();
 
     // All eight screens were just drawn above - nothing pending yet.
-    _dirty    = 0;
-    _slideScr = SLIDE_IDLE;
+    _dirty       = 0;
+    _slideActive = 0;
 
     // Every screen above was fully repainted by an updateDisplayXxx() call,
     // not renderCells(), so no shadow reflects what is actually on screen.
@@ -416,7 +435,7 @@ void OledMonitorPanel::detach()
     if (!_initialised)
         return;
     _initialised = false;
-    _slideScr    = SLIDE_IDLE;
+    _slideActive = 0;
 }
 
 void OledMonitorPanel::set(int16_t messageID, char *message)
@@ -573,37 +592,37 @@ void OledMonitorPanel::update()
     if (!_initialised)
         return;
 
-    if (_slideScr != SLIDE_IDLE) {
-        if (_dirty & (uint8_t)(1 << _slideScr)) {
-            // A new value supersedes the slide outright - no queueing, no
-            // chaining, the screen goes straight to what the sim last sent.
-            // Repainted right here instead of being left in _dirty for a
-            // later call: abortSlide() has just marked the moving cells
-            // unknown, and until they are redrawn the panel is showing two
-            // half glyphs.
-            uint8_t scr = _slideScr;
-            abortSlide();
-            _dirty &= ~((uint8_t)1 << scr);
-            renderScreen(scr);
-            return;
-        }
+    // A new value for a screen supersedes any slide on that screen outright -
+    // no queueing, no chaining, it goes straight to what the sim last sent.
+    // Repainted here rather than left in _dirty for a later call: abortSlide()
+    // has just marked the moving cells unknown, and until they are redrawn the
+    // panel is showing half glyphs.
+    uint8_t collide = _dirty & _slideActive;
+    if (collide) {
+        uint8_t scr = __builtin_ctz(collide);
+        abortSlide(scr);
+        _dirty &= ~((uint8_t)1 << scr);
+        renderScreen(scr);
+        return;
+    }
 
+    if (_slideActive) {
         // Frame clock, deliberately NOT MF_CUSTOMDEVICE_POLL_MS. That define
         // throttles the whole of update(), so it would also delay ordinary
-        // repaints of the six unanimated screens by up to a frame period and
-        // stretch a Light Test burst of eight screens to 200 ms of wall
-        // clock. Gating only the slide leaves every other path exactly as it
-        // was.
+        // repaints of the unanimated screens by up to a frame period and
+        // stretch a Light Test burst of eight screens to eight frame periods
+        // of wall clock. Gating only the slide leaves every other path exactly
+        // as it was.
         //
         // Clocked from now rather than from _lastFrameMs + ANIM_FRAME_MS: if
-        // update() was starved (a full repaint is 55 ms, more than two frame
-        // periods) the catch-up form would then fire several 14 ms frames
-        // back to back, which is precisely the burst the budget exists to
-        // prevent. Losing a little smoothness beats losing the margin.
+        // update() was starved (a full repaint is 55 ms, more than four frame
+        // periods) the catch-up form would fire several cells back to back,
+        // which is precisely the burst this budget exists to prevent. Losing a
+        // little smoothness beats losing the margin.
         if ((uint32_t)(millis() - _lastFrameMs) >= ANIM_FRAME_MS) {
             _lastFrameMs = millis();
             slideStep();
-            return; // one slide frame is the whole budget for this call
+            return; // one cell is the whole budget for this call
         }
     }
 
@@ -692,10 +711,11 @@ void OledMonitorPanel::blankAllDisplays(void)
     // The framebuffer no longer matches any shadow's idea of what is drawn.
     memset(_shadowSig, 0, sizeof(_shadowSig));
 
-    // Drop any slide too. set() clears _dirty on shutdown, so update() would
-    // never see the abort condition and would happily keep drawing frames
-    // onto a screen that was just blanked.
-    _slideScr = SLIDE_IDLE;
+    // Drop every slide too. set() clears _dirty on shutdown, so update() would
+    // never see the abort condition and would happily keep drawing frames onto
+    // screens that were just blanked.
+    _slideActive = 0;
+    memset(_slidePending, 0, sizeof(_slidePending));
 }
 
 /*
@@ -864,86 +884,119 @@ static uint8_t slideOffset(uint8_t frame, uint8_t frames, uint8_t h)
 }
 
 /*
-  Draws one frame of the slide in flight and, on the last frame, ends it.
+  Draws one cell of one slide - the whole budget for this call, and the reason
+  several screens can animate at once. A cell frame costs 7.1 ms measured:
+  clear the rectangle, rasterise the outgoing and incoming glyphs into it,
+  push it once. That is the longest stretch this firmware ever blocks serial
+  for, and at 115200 baud the 256-byte receive buffer holds 22 ms - so one
+  cell leaves a wide margin where two did not.
 
-  Both glyphs go straight into the framebuffer - no intermediate canvas.
-  Clipping to the cell rectangle is done by fastDrawDigit() refusing to write
-  outside [page0, page0 + pages), so the halves that have left the cell cost
-  nothing to hide. One displayRegion() per moving cell; the whole frame is
-  costed in the ANIM_MAX_CELLS comment above.
+  Screens take turns from _slideCursor rather than the search always starting
+  at 0, so a screen the sim drives hard cannot starve the rest. A screen with
+  two moving cells advances a frame every second turn: it animates alongside
+  the others, just over a longer wall-clock span.
+
+  Both glyphs go straight into the framebuffer, no intermediate canvas.
+  Clipping to the cell is free - fastDrawDigit() only ever writes pages
+  [page0, page0 + pages), so the halves that have left the cell cost nothing
+  to hide.
 */
 void OledMonitorPanel::slideStep(void)
 {
-    uint8_t scr = _slideScr;
+    if (!_slideActive) return;
+
+    // Next screen owing a cell this frame, starting after the last one served.
+    uint8_t scr = SCR_COUNT;
+    for (uint8_t n = 0; n < SCR_COUNT; n++) {
+        uint8_t i = (uint8_t)((_slideCursor + 1 + n) % SCR_COUNT);
+        if (_slidePending[i]) { scr = i; break; }
+    }
+    if (scr == SCR_COUNT) return;
+    _slideCursor = scr;
+
+    uint8_t cell = __builtin_ctz(_slidePending[scr]);
+    _slidePending[scr] &= ~((uint8_t)1 << cell);
 
     CellGeom geom;
     memcpy_P(&geom, &cellGeomTable[scr], sizeof(CellGeom));
     const GFXfont *font = fontForIndex(geom.fontIdx);
 
     uint8_t h    = geom.pages * 8;
-    bool    last = (++_slideFrame >= _animFrames);
-    uint8_t off  = last ? h : slideOffset(_slideFrame, _animFrames, h);
+    bool    last = (_slideFrame[scr] >= _animFrames);
+    uint8_t off  = last ? h : slideOffset(_slideFrame[scr], _animFrames, h);
+    bool    up   = (_slideUp & ((uint8_t)1 << scr)) != 0;
 
     // The incoming digit follows one whole cell height behind the outgoing
-    // one, so at off == 0 it is entirely outside the rectangle and at
-    // off == h the outgoing one is - which is what makes the pair read as two
-    // positions on the same drum rather than as a crossfade.
-    int16_t outShift = _slideUp ? -(int16_t)off : (int16_t)off;
-    int16_t inShift  = _slideUp ? (int16_t)(h - off) : (int16_t)off - (int16_t)h;
+    // one, so at off == 0 it is entirely outside the rectangle and at off == h
+    // the outgoing one is - which is what makes the pair read as two positions
+    // on one drum rather than as a crossfade.
+    int16_t outShift = up ? -(int16_t)off : (int16_t)off;
+    int16_t inShift  = up ? (int16_t)(h - off) : (int16_t)off - (int16_t)h;
+
+    uint8_t cursorX = geom.x + cell * geom.advance;
+    uint8_t blitX   = cursorX + 2;
 
     setTCAChannel(geom.channel);
-    for (uint8_t i = 0; i < geom.digits; i++) {
-        if (!(_slideMask & (uint8_t)(1 << i))) continue;
+    clearCell(blitX, geom.page0, geom.pages, geom.blitW);
+    // On the last frame the outgoing glyph is a full cell height away and
+    // would write nothing, so skip its ~1.2 ms rather than rasterise it into
+    // the clip test.
+    if (!last)
+        fastDrawDigit(cursorX, geom.page0, geom.pages, font, _shadow[scr][cell], outShift);
+    fastDrawDigit(cursorX, geom.page0, geom.pages, font, _slideTo[scr][cell], inShift);
+    oled->displayRegion(blitX, geom.page0, geom.blitW, geom.pages);
 
-        uint8_t cursorX = geom.x + i * geom.advance;
-        uint8_t blitX   = cursorX + 2;
+    if (last) _shadow[scr][cell] = _slideTo[scr][cell];
 
-        clearCell(blitX, geom.page0, geom.pages, geom.blitW);
-        // On the last frame the outgoing glyph is a full cell height away and
-        // would write nothing, so skip its ~1.2 ms rather than rasterise it
-        // into the clip test.
-        if (!last)
-            fastDrawDigit(cursorX, geom.page0, geom.pages, font, _shadow[scr][i], outShift);
-        fastDrawDigit(cursorX, geom.page0, geom.pages, font, _slideTo[i], inShift);
-        oled->displayRegion(blitX, geom.page0, geom.blitW, geom.pages);
-    }
-
-    if (last) {
-        // Those cells now hold exactly _slideTo, so the shadow describes the
-        // panel again and the next value can take the ordinary partial path.
-        for (uint8_t i = 0; i < geom.digits; i++) {
-            if (_slideMask & (uint8_t)(1 << i)) _shadow[scr][i] = _slideTo[i];
+    // Whole frame drawn for this screen: advance it, or retire it.
+    if (_slidePending[scr] == 0) {
+        if (last) {
+            finishSlide(scr);
+        } else {
+            _slideFrame[scr]++;
+            _slidePending[scr] = _slideMask[scr];
         }
-        _slideScr = SLIDE_IDLE;
     }
 }
 
 /*
-  Ends the slide in flight without finishing it, leaving the shadow honest
-  about what that did to the panel.
+  Retires a slide that has drawn its last frame. Every moving cell now holds
+  exactly _slideTo, so the shadow describes the panel again and the next value
+  for this screen can take the ordinary partial path.
 */
-void OledMonitorPanel::abortSlide(void)
+void OledMonitorPanel::finishSlide(uint8_t scr)
 {
-    uint8_t scr = _slideScr;
-    _slideScr = SLIDE_IDLE;
+    _slideActive &= ~((uint8_t)1 << scr);
+    _slidePending[scr] = 0;
+}
+
+/*
+  Ends a slide without finishing it, leaving the shadow honest about what that
+  did to the panel.
+*/
+void OledMonitorPanel::abortSlide(uint8_t scr)
+{
     if (scr >= SCR_COUNT) return;
+    if (!(_slideActive & ((uint8_t)1 << scr))) return;
 
     // Mid-slide those cells hold half of each glyph, which no character
-    // describes - so poison them rather than pretending they still hold the
-    // old digit. The alternative, dropping _shadowSig, would force a 55 ms
-    // full repaint; this costs the caller one ordinary cell redraw each,
-    // because CELL_UNKNOWN can never compare equal to the incoming character.
+    // describes - so poison them rather than pretend they still hold the old
+    // digit. The alternative, dropping _shadowSig, would force a 55 ms full
+    // repaint; this costs the caller one ordinary cell redraw each, because
+    // CELL_UNKNOWN can never compare equal to the incoming character.
     for (uint8_t i = 0; i < sizeof(_shadow[0]) - 1; i++) {
-        if (_slideMask & (uint8_t)(1 << i)) _shadow[scr][i] = CELL_UNKNOWN;
+        if (_slideMask[scr] & ((uint8_t)1 << i)) _shadow[scr][i] = CELL_UNKNOWN;
     }
+    _slideActive &= ~((uint8_t)1 << scr);
+    _slidePending[scr] = 0;
 }
 
 /*
   Starts an odometer slide for `scr` if this transition is one worth
-  animating, and draws its first frame. Returns true when it took the screen
+  animating, and draws its first cell. Returns true when it took the screen
   over - the caller must then do nothing else this update. Returns false for
-  everything else, which drops the caller straight back onto the ordinary
-  renderCells() / full-repaint path with nothing changed.
+  everything else, which drops the caller back onto the ordinary renderCells()
+  or full-repaint path with nothing changed.
 
   Call it immediately before renderCells(), with the same cells/sig.
 */
@@ -951,16 +1004,16 @@ bool OledMonitorPanel::slideCells(uint8_t scr, const char *cells, uint8_t sig)
 {
     if (!(_animMask & (uint8_t)(1 << scr))) return false; // opt-in, and off by default
     if (lightTestOn == 1) return false;
-    if (_slideScr != SLIDE_IDLE) return false;            // one slide in flight at a time
     if (!_initialised || scr >= SCR_COUNT) return false;
+    if (_slideActive & ((uint8_t)1 << scr)) return false; // already sliding this screen
 
     CellGeom geom;
     memcpy_P(&geom, &cellGeomTable[scr], sizeof(CellGeom));
 
     // Everything renderCells() would refuse on has to be refused here too: a
-    // slide animates from _shadow, so it is only meaningful when the shadow
-    // is known to describe the panel.
-    if (geom.digits == 0 || geom.digits >= sizeof(_slideTo)) return false;
+    // slide animates from _shadow, so it is only meaningful when the shadow is
+    // known to describe the panel.
+    if (geom.digits == 0 || geom.digits >= sizeof(_slideTo[0])) return false;
     if (sig == 0 || _shadowSig[scr] != sig) return false;
     if (strlen(cells) != geom.digits) return false;
 
@@ -969,18 +1022,28 @@ bool OledMonitorPanel::slideCells(uint8_t scr, const char *cells, uint8_t sig)
         char from = _shadow[scr][i];
         char to   = cells[i];
         // The dash fields padLeftRanged() produces (RADIO ALT above 2500 ft,
-        // VOR DME with no station tuned) and the CELL_UNKNOWN an aborted
-        // slide leaves behind are not positions on a drum, so there is
-        // nothing to roll into or out of. Snap the whole screen.
+        // VOR DME with no station tuned) and the CELL_UNKNOWN an aborted slide
+        // leaves behind are not positions on a drum, so there is nothing to
+        // roll into or out of. Snap the whole screen.
         if (from < '0' || from > '9' || to < '0' || to > '9') return false;
         if (from == to) continue;
         mask |= (uint8_t)(1 << i);
         moving++;
     }
     if (moving == 0) return false;             // nothing moved - let renderCells() no-op
-    if (moving > ANIM_MAX_CELLS) return false; // past the measured frame budget; also
-                                               // reads right, a small step scrolls and
-                                               // a jump clicks over
+    if (moving > ANIM_MAX_CELLS) return false; // a step this big clicks over instead
+
+    // Panel-wide budget. Counting what is already rolling rather than how many
+    // screens are - two screens moving one digit each cost exactly what one
+    // screen moving two does.
+    uint8_t inFlight = 0;
+    for (uint8_t i = 0; i < SCR_COUNT; i++) {
+        if (_slideActive & ((uint8_t)1 << i)) {
+            uint8_t m = _slideMask[i];
+            while (m) { inFlight++; m &= (uint8_t)(m - 1); }
+        }
+    }
+    if (inFlight + moving > ANIM_CELLS_IN_FLIGHT) return false;
 
     // Direction is taken from the value as a whole, never per cell: across a
     // carry (350 -> 349) the units rise while the tens fall, and rolling the
@@ -988,20 +1051,26 @@ bool OledMonitorPanel::slideCells(uint8_t scr, const char *cells, uint8_t sig)
     // counter. Both strings are the same length and all digits by now, so the
     // byte compare IS the numeric compare - no strtol, no overflow to think
     // about.
-    _slideUp    = (memcmp(cells, _shadow[scr], geom.digits) > 0);
-    _slideScr   = scr;
-    _slideMask  = mask;
-    _slideFrame = 0;
-    memcpy(_slideTo, cells, geom.digits);
-    _slideTo[geom.digits] = '\0';
+    if (memcmp(cells, _shadow[scr], geom.digits) > 0)
+        _slideUp |= ((uint8_t)1 << scr);
+    else
+        _slideUp &= ~((uint8_t)1 << scr);
 
-    // First frame now, not up to a frame period from now: the value has
-    // already changed and the screen should start moving on the same update()
-    // an unanimated screen would have snapped on.
+    _slideMask[scr]    = mask;
+    _slidePending[scr] = mask;
+    _slideFrame[scr]   = 1;
+    memcpy(_slideTo[scr], cells, geom.digits);
+    _slideTo[scr][geom.digits] = 0x00;
+    _slideActive |= ((uint8_t)1 << scr);
+
+    // First cell now, not up to a frame period from now: the value has already
+    // changed and the screen should start moving on the same update() an
+    // unanimated screen would have snapped on.
     _lastFrameMs = millis();
     slideStep();
     return true;
 }
+
 
 /*******************************************
 Has to be redone, only tests

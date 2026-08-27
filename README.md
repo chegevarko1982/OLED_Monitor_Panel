@@ -134,8 +134,8 @@ ANIM=<names joined with +>|FRAMES=<2..8>
 | `ANIM=RA\|FRAMES=6` | 6 frames instead of 4 |
 | `ANIM=OFF` | explicitly off |
 
-`FRAMES` is 2..8 at 25 ms per frame, so the default 4 gives a 100 ms roll and 2
-gives 50 ms. Names and keys are case insensitive and their order does not
+`FRAMES` is 2..8 at 12 ms per frame, so the default 8 gives a 96 ms roll in
+5-pixel steps and 4 gives 48 ms in steps twice that size. Names and keys are case insensitive and their order does not
 matter, so `frames=2|anim=all` is the same string. A value that cannot be
 parsed switches animation off entirely and reports
 
@@ -161,10 +161,18 @@ A transition is snapped rather than rolled when rolling would be meaningless:
 - into or out of the dashes - radio altimeter above 2500 ft, DME with no
   station tuned, any managed screen showing `---`;
 - during Light Test;
-- when the step moves more than two digits at once. `300` to `299` clicks over.
-  That is also the frame budget: one digit costs 7.1 ms of the 25 ms frame, so
-  two are affordable and three are not. It reads right as well - a small step
-  scrolls, a jump snaps.
+- when the step moves more than two digits at once. `300` to `299` clicks over -
+  a small step scrolls, a jump snaps;
+- when two digits are already rolling anywhere on the panel. That is the hard
+  ceiling and it is arithmetic, not taste: one digit's frame costs 7.1 ms and
+  the firmware draws one per 12 ms period, so N digits rolling for F frames
+  take N x F x 12 ms. Holding an 8-frame roll near 100 ms allows at most about
+  1.7 digits in flight. One digit rolls in 96 ms; two share the frames and take
+  around 190 ms; a third would push every roll past the point where the sim has
+  already sent the next value, so it snaps instead.
+
+Two screens each moving one digit cost exactly what one screen moving two does -
+the budget counts digits, not screens.
 
 ### Aircraft profile
 

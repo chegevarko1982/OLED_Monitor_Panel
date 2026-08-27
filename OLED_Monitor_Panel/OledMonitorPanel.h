@@ -54,7 +54,7 @@ enum : uint8_t {
 // it names screens but no FRAMES=.
 #define ANIM_FRAMES_MIN     2
 #define ANIM_FRAMES_MAX     8
-#define ANIM_FRAMES_DEFAULT 4
+#define ANIM_FRAMES_DEFAULT 8
 
 class OledMonitorPanel
 {
@@ -94,16 +94,20 @@ private:
     char    _shadow[SCR_COUNT][6];    // digit characters as last drawn, NUL-terminated
     uint8_t _shadowSig[SCR_COUNT];    // layout signature of what is on screen; 0 = unknown
 
-    // Odometer slide state. Exactly one slide runs at a time - that is what
-    // holds the per-frame cost inside the measured two-cell budget without
-    // needing a scheduler; a second screen changing mid-slide just snaps.
-    // See slideCells() for the constants this is costed against.
-    uint8_t  _slideScr;      // SCR_* being animated, 0xFF when idle
-    uint8_t  _slideMask;     // one bit per moving cell index
-    uint8_t  _slideFrame;    // frames drawn so far, 1.._animFrames
-    bool     _slideUp;       // true = digits roll upward (value increased)
-    char     _slideTo[6];    // target cell string, same shape as _shadow[]
-    uint32_t _lastFrameMs;   // millis() at the last slide frame drawn
+    // Odometer slide state, one entry per screen. Slides run concurrently:
+    // the budget that matters is not "one screen at a time" but the length of
+    // the single blocking stretch, and slideStep() draws exactly one cell per
+    // call - 7.1 ms measured - no matter how many screens are moving. Screens
+    // then take turns through _slideCursor, so a screen the sim drives hard
+    // cannot lock the others out. See slideStep() for the arithmetic.
+    uint8_t  _slideActive;              // bit per screen with a slide in flight
+    uint8_t  _slideMask[SCR_COUNT];     // cells moving in that screen's slide
+    uint8_t  _slidePending[SCR_COUNT];  // cells of the current frame not drawn yet
+    uint8_t  _slideFrame[SCR_COUNT];    // frames drawn so far, 1.._animFrames
+    uint8_t  _slideUp;                  // bit per screen: digits roll upward
+    char     _slideTo[SCR_COUNT][6];    // target cell string, shaped like _shadow[]
+    uint8_t  _slideCursor;              // round-robin position over the screens
+    uint32_t _lastFrameMs;              // millis() at the last cell drawn
 
     void setTCAChannel(byte i);
     void blankAllDisplays(void);
@@ -120,7 +124,8 @@ private:
     void commitCells(uint8_t scr, const char *cells, uint8_t sig);
     bool slideCells(uint8_t scr, const char *cells, uint8_t sig);
     void slideStep(void);
-    void abortSlide(void);
+    void abortSlide(uint8_t scr);
+    void finishSlide(uint8_t scr);
     void updateDisplayEfisLeft(void);
     void updateDisplayEfisRight(void);
     void updateDisplayFcuSpd(void);
