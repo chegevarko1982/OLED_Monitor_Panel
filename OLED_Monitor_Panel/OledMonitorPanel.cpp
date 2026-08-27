@@ -152,12 +152,6 @@ static void machValue(char *cells, char *shown, const char *src)
 
 
 /*
-  Right-pad dst (in place) with fill up to width chars, without exceeding
-  dstSize - 1 chars. Used only on local display copies, never on the
-  stored globals.
-*/
-
-/*
   Copies src into dst (see copyValue) only if it actually differs.
   Returns true if the value changed (and therefore dst was updated).
 */
@@ -552,6 +546,21 @@ void OledMonitorPanel::setTCAChannel(byte i)
     Wire.beginTransmission(_addrI2C);
     Wire.write(1 << i);
     Wire.endTransmission();
+
+    // The multiplexer needs to settle before the next transaction reaches the
+    // panel behind it. Without this the bus occasionally locks up on the very
+    // first switch at boot, and Wire on AVR busy-waits with no timeout, so the
+    // board hangs before it ever answers the connector - it shows up in
+    // MobiFlight as a nameless "Compatible" module with no serial.
+    //
+    // The original firmware used delay(5) here. That was removed as
+    // copy-paste, which left the margin thin; holding the bus at 400 kHz for
+    // our own transactions (see OLEDInterface) then cut it further, and from
+    // there whether a given build survived depended on its exact instruction
+    // timing. 100 us was measured to be enough, twice the value that already
+    // worked, and costs 0.8 ms across all eight screens at boot - against
+    // 55 ms for a single full repaint.
+    delayMicroseconds(100);
     _currentChannel = i;
 }
 
