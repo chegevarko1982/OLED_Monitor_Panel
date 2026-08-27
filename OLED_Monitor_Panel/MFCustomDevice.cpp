@@ -55,9 +55,18 @@ bool MFCustomDevice::getStringFromMem(uint16_t addrMem, char *buffer, bool confi
 
 /* **********************************************************************************
     Helpers for the optional "Additional Config" string of the custom device.
-    Syntax: ANIM=<RA|DME|ALL|OFF>[,...]|FRAMES=<2..8>
+    Syntax: ANIM=<RA|DME|ALL|OFF>[+...]|FRAMES=<2..8>
     Key order does not matter, keys and values are case insensitive.
     An empty or absent config string means animation off.
+
+    The list separator is '+' and NOT ',' - that is not a style choice. ',' is
+    the CmdMessenger field separator, so a comma typed into the settings field
+    is cut off there and never reaches the EEPROM: the board ends up storing a
+    config field with no terminating '.', Config.cpp's readEndCommand() then
+    runs past the end of the entry, CustomDevice::Add() is never called and the
+    whole custom device silently disappears from the board. ';' (command
+    separator), '/' (escape), and '.' / ':' (EEPROM field and device
+    terminators) are unusable for the same class of reason.
 ********************************************************************************** */
 
 // strips leading and trailing spaces, modifies the buffer in place
@@ -89,11 +98,11 @@ static bool parseFrames(const char *s, uint8_t *frames)
     return true;
 }
 
-// parses the comma separated screen list of the ANIM key into a SCR_* bit mask
+// parses the '+' separated screen list of the ANIM key into a SCR_* bit mask
 static bool parseAnimList(char *list, uint8_t *mask)
 {
     char *state = NULL;
-    char *token = strtok_r(list, ",", &state);
+    char *token = strtok_r(list, "+", &state);
     if (token == NULL) return false; // "ANIM=" without any value
     while (token != NULL) {
         token = trimSpaces(token);
@@ -106,7 +115,7 @@ static bool parseAnimList(char *list, uint8_t *mask)
             *mask |= (ANIM_RADIO_ALT | ANIM_VOR_DME);
         else if (strcasecmp_P(token, PSTR("OFF")) != 0) // "OFF" adds no bits
             return false;
-        token = strtok_r(NULL, ",", &state);
+        token = strtok_r(NULL, "+", &state);
     }
     return true;
 }
@@ -201,7 +210,9 @@ void MFCustomDevice::attach(uint16_t adrPin, uint16_t adrType, uint16_t adrConfi
                 _animFrames = frames;
             } else {
                 // fall back to animation off, a silently half applied option is worse
-                cmdMessenger.sendCmd(kStatus, F("Custom Device: bad Config, expected ANIM=RA,DME|FRAMES=4"));
+                // No ',' in this text either - it would be split into three fields on
+                // the way to the connector, for exactly the reason above.
+                cmdMessenger.sendCmd(kStatus, F("Custom Device: bad Config - use ANIM=RA+DME|FRAMES=4"));
             }
         }
 

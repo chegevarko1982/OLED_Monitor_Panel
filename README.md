@@ -101,7 +101,7 @@ an **Additional Config** text field:
 | String | Effect |
 |---|---|
 | *(empty)* | animation off - the default, and what an already-configured board keeps |
-| `ANIM=RA,DME` | both screens, 4 frames |
+| `ANIM=RA+DME` | both screens, 4 frames |
 | `ANIM=RA` | radio altimeter only |
 | `ANIM=RA\|FRAMES=6` | 6 frames instead of 4 |
 | `ANIM=ALL` | every screen that supports it |
@@ -112,10 +112,18 @@ and screen names are case insensitive and their order does not matter. A string
 that cannot be parsed switches animation off and reports
 
 ```
-Custom Device: bad Config, expected ANIM=RA,DME|FRAMES=4
+Custom Device: bad Config - use ANIM=RA+DME|FRAMES=4
 ```
 
 back to the connector, rather than half-applying itself in silence.
+
+The list separator is `+`, and the characters `,` `;` `/` `.` `:` must not appear
+in this field at all. The first three are the CmdMessenger field, command and
+escape characters and the last two terminate fields and devices in the board's
+stored config, so any of them truncates the entry on its way to the EEPROM -
+which leaves the config field unterminated and makes the whole custom device
+disappear from the board on the next restart. Nothing in the settings dialog
+warns about this.
 
 A transition never animates when it would be meaningless: into or out of the
 dashes (radio altimeter above 2500 ft, DME with no station), during Light Test,
