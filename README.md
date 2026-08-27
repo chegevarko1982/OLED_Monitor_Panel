@@ -89,6 +89,39 @@ Extract the ZIP from `_dist/` into the `Community` folder of your MobiFlight ins
 the board and start MobiFlight. Flash the firmware, then add one custom device and set the I2C
 address of the multiplexer.
 
+### Digit animation (optional)
+
+`RADIO ALT` and `VOR DME` can roll their digits like an odometer instead of
+snapping. Both are driven by the sim rather than by a knob, so the value walks
+in small steps and the roll reads as a counter.
+
+It is off unless asked for. In the board settings dialog, the custom device has
+an **Additional Config** text field:
+
+| String | Effect |
+|---|---|
+| *(empty)* | animation off - the default, and what an already-configured board keeps |
+| `ANIM=RA,DME` | both screens, 4 frames |
+| `ANIM=RA` | radio altimeter only |
+| `ANIM=RA\|FRAMES=6` | 6 frames instead of 4 |
+| `ANIM=ALL` | every screen that supports it |
+| `ANIM=OFF` | explicitly off |
+
+`FRAMES` is 2..8 at 25 ms per frame, so the default 4 gives a 100 ms roll. Keys
+and screen names are case insensitive and their order does not matter. A string
+that cannot be parsed switches animation off and reports
+
+```
+Custom Device: bad Config, expected ANIM=RA,DME|FRAMES=4
+```
+
+back to the connector, rather than half-applying itself in silence.
+
+A transition never animates when it would be meaningless: into or out of the
+dashes (radio altimeter above 2500 ft, DME with no station), during Light Test,
+or when a step moves more than two digits at once - `300` to `299` clicks over.
+That last one is also the frame budget: one cell costs 7.1 ms of the 25 ms frame.
+
 ### Aircraft profile
 
 The package ships **no** `.mcc` aircraft profile. The one inherited from the original project
