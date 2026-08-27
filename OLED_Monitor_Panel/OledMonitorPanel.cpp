@@ -115,28 +115,33 @@ static void padLeftRanged(char *dst, uint8_t width, const char *src, int16_t lo,
 /*
   Normalises a MACH value into three digit cells and the string to draw.
 
-  MACH always reads x.xx on this panel, but what actually arrives depends on
-  how the MobiFlight profile is set up, and the three plausible forms do not
-  agree with each other:
+  MACH reads x.xx on this panel, but what arrives depends on how the profile
+  is configured - with a point ("0.78") or without one ("78", which is what
+  oled_monitor_panel.device.json documents for message 2). Taking the point
+  from the string is therefore not reliable, so it is drawn from here.
 
-      "0.78"   the sim value straight through
-      "78"     what oled_monitor_panel.device.json documents for message 2
-      "0.5"    the profile rule "value < 100 -> 0.$" applied to a variable
-               already scaled by 100 - i.e. mach 0.05
+  The digits are read as a decimal, not as a raw count: whatever follows the
+  point is the fraction and is padded on the RIGHT to two places, so "0.5" is
+  0.50. With no point at all the digits are taken to be the fraction, since
+  that is the format device.json describes - "78" is 0.78.
 
-  Taking the decimal point from the string therefore cannot be right for all
-  of them. Stripping any '.' and zero-padding the digits to three makes every
-  form land on the same cells, and the point is drawn from here instead.
-
-  It also guarantees the three-character cell string renderCells() needs: a
-  shorter one fails its length check and silently falls back to a full
-  repaint on every single update.
+  This also guarantees the three-character cell string renderCells() needs; a
+  shorter one fails its length check and silently falls back to a full repaint
+  on every update.
 */
 static void machValue(char *cells, char *shown, const char *src)
 {
-    char digits[8];
-    stripDot(digits, sizeof(digits), src);
-    padLeft(cells, 3, digits);
+    const char *dot  = strchr(src, '.');
+    const char *frac = dot ? dot + 1 : src;
+
+    // Integer digit: the one just before the point, or '0' when the value
+    // carries no integer part (".5") and when there is no point at all.
+    cells[0] = (dot && dot != src) ? dot[-1] : '0';
+
+    // Fraction, padded on the right to exactly two places.
+    cells[1] = frac[0] ? frac[0] : '0';
+    cells[2] = (frac[0] && frac[1]) ? frac[1] : '0';
+    cells[3] = 0;
 
     shown[0] = cells[0];
     shown[1] = '.';
@@ -144,6 +149,7 @@ static void machValue(char *cells, char *shown, const char *src)
     shown[3] = cells[2];
     shown[4] = 0;
 }
+
 
 /*
   Right-pad dst (in place) with fill up to width chars, without exceeding
