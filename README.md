@@ -124,21 +124,17 @@ That last one is also the frame budget: one cell costs 7.1 ms of the 25 ms frame
 
 ### Aircraft profile
 
-The package ships **no** `.mcc` aircraft profile. The one inherited from the original project
-(`profiles/msfs2020/FBW_A320_EfisAndFcu_only.mcc`) was removed: it was bound to
-`serial="Gagagu FCU-EFIS/ SN-397-88A"` - the original author's board - and still referenced
-message ids 0/1/3/4/7 from the old seven-screen layout, which this firmware no longer has.
+The package ships **no** `.mcc` aircraft profile, by choice. The one inherited
+from the original project was bound to `serial="Gagagu FCU-EFIS/ SN-397-88A"` -
+the original author's board - and still referenced message ids 0/1/3/4/7 from
+the seven-screen layout this firmware dropped, so it could not have attached to
+anything. A `.mcc` always records the board it was exported from, so a shipped
+profile has to be re-pointed at the installing user's board anyway; assigning
+the outputs from scratch against the message list above is no more work.
 
-To ship one, drop the exported `.mcc` into
-
-```
-OLED_Monitor_Panel/Community/profiles/msfs2020/
-```
-
-and rebuild. `copy_fw_files.py` stages the whole `Community` folder, so nothing else needs
-changing. A `.mcc` always records the board it was exported from, so anyone installing the
-package still has to point the profile at their own board on first load - that is normal and
-MobiFlight asks for it.
+If you ever do want to ship one, drop it in
+`OLED_Monitor_Panel/Community/profiles/msfs2020/` and rebuild - the whole
+`Community` folder is staged into the ZIP, nothing else needs changing.
 
 ## Credits
 
