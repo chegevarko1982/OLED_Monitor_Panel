@@ -163,17 +163,19 @@ A transition is snapped rather than rolled when rolling would be meaningless:
 - into or out of the dashes - radio altimeter above 2500 ft, DME with no
   station tuned, any managed screen showing `---`;
 - during Light Test;
-- when the step moves more than two digits at once. `300` to `299` clicks over -
-  a small step scrolls, a jump snaps;
-- when a digit at rest would have to start turning and two are already turning
-  anywhere on the panel. Re-aiming a wheel that is already in motion is free
+- when the step moves more than three digits at once - `09900` to `10000` has
+  nothing to roll through and clicks over. Three rather than two because a
+  carry needs all three: counting a 3-digit screen one step at a time, the
+  leading digit never changes on its own, so a lower cap would keep it from
+  ever animating;
+- when a digit at rest would have to start turning and three are already
+  turning anywhere on the panel. Re-aiming a wheel that is already in motion is free
   and never snaps - that is the case a knob being turned quickly produces. That is the hard
   ceiling and it is arithmetic, not taste: one digit's frame costs 7.1 ms and
   the firmware draws one per 12 ms period, so N digits rolling for F frames
-  take N x F x 12 ms. Holding an 8-frame roll near 100 ms allows at most about
-  1.7 digits in flight. One digit rolls in 96 ms; two share the frames and take
-  around 190 ms; a third would push every roll past the point where the sim has
-  already sent the next value, so it snaps instead.
+  share the frame period between them: one digit turns in about 96 ms, two in
+  190 ms, three in 290 ms. Past three the wheels visibly lag the value they are
+  chasing, so those screens snap instead.
 
 Two screens each moving one digit cost exactly what one screen moving two does -
 the budget counts digits, not screens.

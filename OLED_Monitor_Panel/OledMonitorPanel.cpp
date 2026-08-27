@@ -225,22 +225,34 @@ static bool updateValue(char *dst, uint8_t dstSize, const char *src)
 #define DRUM_SPAN   (DRUM_DIGITS * 256)
 
 /*
-  How many digits a single transition may move. A step small enough to read as
-  a roll moves one or two; 300 -> 299 turns all three and should click over
-  instead of crawling.
+  How many digits a single transition may move and still be turned rather than
+  snapped.
+
+  Three, because a carry is exactly what needs it. Counting a 3-digit screen
+  one step at a time, the hundreds digit NEVER changes on its own: 099 -> 100
+  and 199 -> 200 move all three at once. At two, the leading digit could not
+  animate at all - not as a policy but as an accident of arithmetic, which is
+  what it looked like on the panel.
+
+  Above three it stops being a step and becomes a jump: 09900 -> 10000 on the
+  altitude screen has nothing to roll through and should click over.
 */
-#define ANIM_MAX_CELLS 2
+#define ANIM_MAX_CELLS 3
 
 /*
   How many digit cells may be turning at once across the whole panel.
 
   Arithmetic, not taste. One cell step costs 7.1 ms and drumStep() does one per
   frame period, so N cells turning share the period between them: a one-digit
-  turn that takes ~96 ms alone takes ~192 ms with two in flight. A third would
-  push every turn past the point where the sim has already sent the next value.
-  Screens beyond the cap snap through renderCells().
+  turn takes ~96 ms alone, ~192 ms with two in flight and ~290 ms with three.
+
+  Three so that a carry - which needs all of ANIM_MAX_CELLS at once - is never
+  blocked by the panel-wide budget, since a cap that admits a transition only
+  to have the next check reject it would be the same defect twice. Beyond three
+  the wheels visibly lag the value they are chasing, so those screens snap
+  through renderCells() instead.
 */
-#define ANIM_CELLS_IN_FLIGHT 2
+#define ANIM_CELLS_IN_FLIGHT 3
 
 /*
   Marker written into _shadow[] for a cell whose content is no longer known -
