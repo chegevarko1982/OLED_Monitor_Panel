@@ -120,6 +120,9 @@ private:
     uint8_t  _drumCursor;                             // round-robin position over screens
     uint32_t _lastFrameMs;                            // millis() at the last cell advanced
 
+    bool _busFaultReported;     // a silent multiplexer is reported once, not per transaction
+    bool _busTimeoutReported;   // likewise for a bus that stalls mid-transaction
+
     void setTCAChannel(byte i);
     void blankAllDisplays(void);
     void renderScreen(uint8_t scr);
@@ -133,6 +136,7 @@ private:
     void clearCell(uint8_t blitX, uint8_t page0, uint8_t pages, uint8_t blitW);
     bool renderCells(uint8_t scr, const char *cells, uint8_t sig);
     void commitCells(uint8_t scr, const char *cells, uint8_t sig);
+    bool    recoverI2CBus(void);
     bool    slideCells(uint8_t scr, const char *cells, uint8_t sig);
     uint8_t cellsInFlight(void) const;
     void    drumStep(void);

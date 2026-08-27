@@ -355,6 +355,8 @@ OledMonitorPanel::OledMonitorPanel()
 {
     _initialised = false;
     _currentChannel = 0xFF;
+    _busFaultReported = false;
+    _busTimeoutReported = false;
     _dirty = 0;
     _animMask = 0;
     _animFrames = ANIM_FRAMES_DEFAULT;
@@ -368,6 +370,54 @@ OledMonitorPanel::OledMonitorPanel()
     memset(_shadowSig, 0, sizeof(_shadowSig));
 }
 
+/*
+  Frees the I2C bus if a slave is still holding SDA down, and reports whether
+  it had to. Must run before Wire.begin(), which takes the two pins over.
+
+  Why this is needed at all: SDA is driven by whichever device is talking, and
+  a slave that was interrupted part-way through sending a byte keeps holding it
+  low, waiting for clocks that will never come. The master cannot issue a START
+  over that, so every later transaction fails - and on AVR, Wire busy-waits, so
+  "fails" means the firmware never returns. The board goes silent before it
+  answers the connector, which is what MobiFlight shows as a nameless module.
+
+  Resetting the Mega mid-transaction is exactly how a slave ends up there, and
+  that is precisely what flashing does: the OLEDs keep their power across an
+  upload while the Mega restarts underneath them. Hence a fault that appears
+  after some uploads and not others, and that a reset cannot clear - only
+  cutting power to the panel could, until now.
+
+  The cure is the standard one: pulse SCL by hand until the slave has clocked
+  out the rest of its byte and lets SDA go, then fabricate a STOP so it returns
+  to idle. Nine pulses is one byte plus the ACK, which is the most any slave
+  can be waiting for.
+*/
+bool OledMonitorPanel::recoverI2CBus(void)
+{
+    pinMode(SCL, INPUT_PULLUP);
+    pinMode(SDA, INPUT_PULLUP);
+    delayMicroseconds(10);
+
+    if (digitalRead(SDA) == HIGH) return false; // bus already idle
+
+    for (uint8_t i = 0; i < 9 && digitalRead(SDA) == LOW; i++) {
+        pinMode(SCL, OUTPUT);          // drive low; the pull-up raises it again
+        digitalWrite(SCL, LOW);
+        delayMicroseconds(5);
+        pinMode(SCL, INPUT_PULLUP);
+        delayMicroseconds(5);
+    }
+
+    // STOP is SDA rising while SCL is high - the one edge that means "idle".
+    pinMode(SDA, OUTPUT);
+    digitalWrite(SDA, LOW);
+    delayMicroseconds(5);
+    pinMode(SDA, INPUT_PULLUP);
+    delayMicroseconds(5);
+
+    return true;
+}
+
 void OledMonitorPanel::attach(uint8_t addrI2C, uint8_t animMask, uint8_t frames)
 {
     _addrI2C = addrI2C;
@@ -379,8 +429,33 @@ void OledMonitorPanel::attach(uint8_t addrI2C, uint8_t animMask, uint8_t frames)
                 : frames > ANIM_FRAMES_MAX ? ANIM_FRAMES_MAX
                                            : frames;
     _drumActive = 0;
+    _busFaultReported = false;
+    _busTimeoutReported = false;
+
+    bool recovered = recoverI2CBus();
+
     Wire.begin();
     Wire.setClock(400000);
+
+    /*
+      The second half of the fix, and the more important half: a stuck bus must
+      never again be able to stop the firmware talking.
+
+      Without this, twi_writeTo() spins on a status register with no way out,
+      so any bus fault - a loose SDA, an unpowered panel, a half-finished byte
+      this recovery could not clear - takes the whole board down silently. With
+      it, the transaction gives up, the TWI hardware is reset, and the board
+      goes on answering the connector, which is the difference between a panel
+      that is not drawing and a board that has disappeared.
+
+      25 ms is the library default and is enormous next to any real transaction
+      here: Adafruit sends the framebuffer in 32-byte chunks, ~0.8 ms each at
+      400 kHz. It cannot fire on healthy traffic.
+    */
+    Wire.setWireTimeout(25000, true);
+
+    if (recovered)
+        cmdMessenger.sendCmd(kStatus, F("Custom Device: I2C bus was stuck - recovered"));
     if (!FitInMemory(sizeof(OLEDInterface))) {
         // Error Message to Connector
         cmdMessenger.sendCmd(kStatus, F("Custom Device does not fit in Memory"));
@@ -633,6 +708,16 @@ void OledMonitorPanel::update()
     if (!_initialised)
         return;
 
+    // Say so if the bus timed out. Without this the recovery is worse than the
+    // hang in one respect: the board keeps answering the connector while the
+    // panel quietly stops updating, and there is nothing to see. Reported once
+    // - a genuinely broken bus times out on every transaction.
+    if (!_busTimeoutReported && Wire.getWireTimeoutFlag()) {
+        _busTimeoutReported = true;
+        Wire.clearWireTimeoutFlag();
+        cmdMessenger.sendCmd(kStatus, F("Custom Device: I2C timed out - display data may be lost"));
+    }
+
     // A new value for a screen that is already turning needs no special case
     // here at all: it goes through renderScreen() like any other, and
     // slideCells() moves the wheel's target instead of starting over. That is
@@ -699,7 +784,16 @@ void OledMonitorPanel::setTCAChannel(byte i)
     if (_currentChannel == i) return;
     Wire.beginTransmission(_addrI2C);
     Wire.write(1 << i);
-    Wire.endTransmission();
+    uint8_t err = Wire.endTransmission();
+
+    // A multiplexer that does not answer used to be invisible: the firmware
+    // went on drawing into a bus with nothing on it. Reported once rather than
+    // per transaction, because a dead TCA9548A fails on every one of them and
+    // would otherwise flood the connector faster than it could read.
+    if (err != 0 && !_busFaultReported) {
+        _busFaultReported = true;
+        cmdMessenger.sendCmd(kStatus, F("Custom Device: multiplexer not responding - check I2C address and power"));
+    }
 
     // The multiplexer needs to settle before the next transaction reaches the
     // panel behind it. Without this the bus occasionally locks up on the very
