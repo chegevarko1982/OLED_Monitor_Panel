@@ -91,34 +91,53 @@ address of the multiplexer.
 
 ### Digit animation (optional)
 
-`RADIO ALT` and `VOR DME` can roll their digits like an odometer instead of
-snapping. Both are driven by the sim rather than by a knob, so the value walks
-in small steps and the roll reads as a counter.
+Any screen can roll its digits like an odometer instead of snapping to the new
+value. It is off unless asked for: the custom device has an **Additional
+Config** text field in the board settings dialog, and an empty field means the
+panel behaves exactly as it did before animation existed.
 
-It is off unless asked for. In the board settings dialog, the custom device has
-an **Additional Config** text field:
+#### Screen names
+
+One name per screen, matching the layout table above.
+
+| Name | Screen | TCA channel | Shows | Animates |
+|---|---|---|---|---|
+| `SPD` | FCU SPD | 0 | selected speed, 3 digits | when not managed |
+| `MACH` | MACH | 1 | Mach `X.YZ`, or speed in SPD mode | when not managed |
+| `CRS` | CRS | 2 | HSI course, 3 digits | always |
+| `HDG` | FCU HDG | 3 | selected heading, 3 digits | when not managed |
+| `RA` | Radio Altimeter | 4 | radio altitude, 4 digits | inside 0..2500 ft |
+| `ALT` | FCU ALT | 5 | selected altitude, 5 digits | always |
+| `DME` | VOR DME | 6 | DME distance, 3 digits | with a station tuned |
+| `VS` | FCU V/S | 7 | vertical speed, sign + 4 digits | in V/S mode only |
+| `ALL` | all eight | | | |
+| `OFF` | none | | | explicitly off |
+
+Two of these deserve a word. `MACH` is one screen, not two: it carries the Mach
+value and the selected speed, and message 18 switches between them - the name
+covers the screen either way. `VS` animates in V/S mode but not in FPA mode,
+which draws a decimal point and a different digit count and so is repainted
+whole; message 12 switches between them.
+
+#### Writing the string
+
+```
+ANIM=<names joined with +>|FRAMES=<2..8>
+```
 
 | String | Effect |
 |---|---|
 | *(empty)* | animation off - the default, and what an already-configured board keeps |
-| `ANIM=RA+DME` | radio altimeter and DME, 4 frames |
-| `ANIM=RA` | radio altimeter only |
+| `ANIM=ALL` | every screen, 4 frames |
+| `ANIM=RA+DME` | radio altimeter and DME only |
 | `ANIM=ALT+HDG+CRS` | any combination, joined with `+` |
 | `ANIM=RA\|FRAMES=6` | 6 frames instead of 4 |
-| `ANIM=ALL` | every screen |
 | `ANIM=OFF` | explicitly off |
 
-Screen names: `RA` radio altimeter, `DME` VOR DME, `MACH` the Mach/speed screen,
-`SPD` FCU speed, `HDG` FCU heading, `ALT` FCU altitude, `VS` vertical speed,
-`CRS` course, `ALL` all of them.
-
-`VS` animates in V/S mode only. FPA mode lays the screen out differently - a
-decimal point and a different digit count - and takes the full repaint, as do
-managed dashes and Light Test on any screen.
-
-`FRAMES` is 2..8 at 25 ms per frame, so the default 4 gives a 100 ms roll. Keys
-and screen names are case insensitive and their order does not matter. A string
-that cannot be parsed switches animation off and reports
+`FRAMES` is 2..8 at 25 ms per frame, so the default 4 gives a 100 ms roll and 2
+gives 50 ms. Names and keys are case insensitive and their order does not
+matter, so `frames=2|anim=all` is the same string. A value that cannot be
+parsed switches animation off entirely and reports
 
 ```
 Custom Device: bad Config - use ANIM=RA+DME|FRAMES=4
@@ -126,18 +145,26 @@ Custom Device: bad Config - use ANIM=RA+DME|FRAMES=4
 
 back to the connector, rather than half-applying itself in silence.
 
-The list separator is `+`, and the characters `,` `;` `/` `.` `:` must not appear
-in this field at all. The first three are the CmdMessenger field, command and
-escape characters and the last two terminate fields and devices in the board's
-stored config, so any of them truncates the entry on its way to the EEPROM -
-which leaves the config field unterminated and makes the whole custom device
-disappear from the board on the next restart. Nothing in the settings dialog
-warns about this.
+#### Characters this field must not contain
 
-A transition never animates when it would be meaningless: into or out of the
-dashes (radio altimeter above 2500 ft, DME with no station), during Light Test,
-or when a step moves more than two digits at once - `300` to `299` clicks over.
-That last one is also the frame budget: one cell costs 7.1 ms of the 25 ms frame.
+The list separator is `+` because `,` `;` `/` `.` and `:` are all unusable
+here. The first three are the CmdMessenger field, command and escape
+characters; the last two terminate fields and devices in the board's stored
+config. Any of them truncates the entry on its way to the EEPROM, which leaves
+the config field unterminated and makes **the whole custom device disappear
+from the board**. Nothing in the settings dialog warns about this.
+
+#### When a change does not animate
+
+A transition is snapped rather than rolled when rolling would be meaningless:
+
+- into or out of the dashes - radio altimeter above 2500 ft, DME with no
+  station tuned, any managed screen showing `---`;
+- during Light Test;
+- when the step moves more than two digits at once. `300` to `299` clicks over.
+  That is also the frame budget: one digit costs 7.1 ms of the 25 ms frame, so
+  two are affordable and three are not. It reads right as well - a small step
+  scrolls, a jump snaps.
 
 ### Aircraft profile
 
