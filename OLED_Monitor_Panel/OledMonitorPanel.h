@@ -133,8 +133,9 @@ private:
     void clearCell(uint8_t blitX, uint8_t page0, uint8_t pages, uint8_t blitW);
     bool renderCells(uint8_t scr, const char *cells, uint8_t sig);
     void commitCells(uint8_t scr, const char *cells, uint8_t sig);
-    bool slideCells(uint8_t scr, const char *cells, uint8_t sig);
-    void drumStep(void);
+    bool    slideCells(uint8_t scr, const char *cells, uint8_t sig);
+    uint8_t cellsInFlight(void) const;
+    void    drumStep(void);
     void abortDrum(uint8_t scr);
     void updateDisplayEfisLeft(void);
     void updateDisplayEfisRight(void);

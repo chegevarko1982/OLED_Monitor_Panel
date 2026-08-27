@@ -226,33 +226,41 @@ static bool updateValue(char *dst, uint8_t dstSize, const char *src)
 
 /*
   How many digits a single transition may move and still be turned rather than
-  snapped.
+  snapped. Five is every cell of the widest screen, so this no longer refuses
+  anything - it stays as a bound on the loops below rather than as a policy.
 
-  Three, because a carry is exactly what needs it. Counting a 3-digit screen
-  one step at a time, the hundreds digit NEVER changes on its own: 099 -> 100
-  and 199 -> 200 move all three at once. At two, the leading digit could not
-  animate at all - not as a policy but as an accident of arithmetic, which is
-  what it looked like on the panel.
-
-  Above three it stops being a step and becomes a jump: 09900 -> 10000 on the
-  altitude screen has nothing to roll through and should click over.
+  It was a policy, and the reasoning was wrong twice over. Counting a screen
+  one step at a time, a leading digit NEVER changes on its own: 099 -> 100
+  moves all three, 09900 -> 10000 moves all five. Capping below the width of
+  the screen therefore does not reject jumps - it rejects exactly the carries,
+  which are the transitions most worth watching. And the cost it was guarding
+  against no longer grows with the number of cells: see the step floor in
+  drumStep(), which spends a roughly fixed budget however many are turning.
 */
-#define ANIM_MAX_CELLS 3
+#define ANIM_MAX_CELLS MAX_DIGIT_CELLS
 
 /*
   How many digit cells may be turning at once across the whole panel.
 
-  Arithmetic, not taste. One cell step costs 7.1 ms and drumStep() does one per
-  frame period, so N cells turning share the period between them: a one-digit
-  turn takes ~96 ms alone, ~192 ms with two in flight and ~290 ms with three.
+  Twelve, which the panel only reaches when four screens change together - so
+  in practice this no longer refuses either. It is a stop against a runaway,
+  not a budget; the budget is enforced by the step floor instead, which is the
+  only place it can be enforced without snapping a screen.
 
-  Three so that a carry - which needs all of ANIM_MAX_CELLS at once - is never
-  blocked by the panel-wide budget, since a cap that admits a transition only
-  to have the next check reject it would be the same defect twice. Beyond three
-  the wheels visibly lag the value they are chasing, so those screens snap
-  through renderCells() instead.
+  What it was, and why that was wrong: one cell step costs 7.1 ms and
+  drumStep() advances exactly one cell per frame period, so N cells share the
+  period and a turn that took ~96 ms alone took ~96*N with N in flight. The cap
+  held N to three to stop the wheels lagging the value they chase. But a screen
+  over the cap does not slow down - it is refused outright and snaps - and once
+  every screen is animated, a fourth cell moving somewhere on the panel is the
+  common case rather than the rare one. That is the "some digits roll, some
+  click" this replaces.
+
+  All 28 cells on this panel could be in flight in principle. Nothing sends
+  eight screens at once, and if it did the floor below would simply turn every
+  wheel in two steps.
 */
-#define ANIM_CELLS_IN_FLIGHT 3
+#define ANIM_CELLS_IN_FLIGHT 12
 
 /*
   Marker written into _shadow[] for a cell whose content is no longer known -
@@ -906,6 +914,22 @@ void OledMonitorPanel::commitCells(uint8_t scr, const char *cells, uint8_t sig)
   Clipping is free - fastDrawDigit() only ever writes pages [page0, page0 +
   pages), so the parts that have rotated out of the cell cost nothing to hide.
 */
+/*
+  Digit cells turning right now, across every screen. Both the step floor and
+  the panel-wide budget need this number, and it costs eight popcounts - far
+  below the 7.1 ms frame it helps size, so it is recomputed rather than kept in
+  a counter that every start, settle and abort would have to hold honest.
+*/
+uint8_t OledMonitorPanel::cellsInFlight(void) const
+{
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < SCR_COUNT; i++) {
+        uint8_t m = _drumMoving[i];
+        while (m) { n++; m &= (uint8_t)(m - 1); }
+    }
+    return n;
+}
+
 void OledMonitorPanel::drumStep(void)
 {
     if (!_drumActive) return;
@@ -933,11 +957,31 @@ void OledMonitorPanel::drumStep(void)
     uint16_t dist = up ? (uint16_t)((target - pos + DRUM_SPAN) % DRUM_SPAN)
                        : (uint16_t)((pos - target + DRUM_SPAN) % DRUM_SPAN);
 
-    // _animFrames keeps its documented meaning - more frames, slower wheel -
-    // by setting the floor rather than a frame count. 8 gives 24, 2 gives 96.
-    uint8_t  minStep = (uint8_t)(192 / _animFrames);
-    uint16_t step    = dist >> DRUM_DECEL_SHIFT;
-    if (step < minStep)      step = minStep;
+    /*
+      The step floor - and the one place the panel-wide cost is actually paid.
+
+      _animFrames keeps its documented meaning, more frames meaning a slower
+      wheel, by setting this floor rather than a frame count: 8 gives 24,
+      2 gives 96.
+
+      Scaling it by the number of cells in flight is what lets every cell that
+      wants to turn actually turn. drumStep() advances one cell per frame
+      period, so N cells share the period; without this, N cells settle N times
+      slower and the only defence against that was refusing to animate them at
+      all. Coarsening each step by the same N holds the settle time roughly
+      flat instead - 96 ms for one cell, 132 for two, 156 for three, 180 for
+      five, 348 even for a fabricated twelve, against 96*N before - and the
+      wheel still passes through intermediate positions, never fewer than two,
+      which is the whole difference between a roll and a click.
+
+      DRUM_MAX_STEP caps it at half a digit per step, so past eight cells in
+      flight the floor stops growing and turns lengthen again, gently.
+    */
+    uint16_t floorStep = (uint16_t)(192 / _animFrames) * cellsInFlight();
+    if (floorStep > DRUM_MAX_STEP) floorStep = DRUM_MAX_STEP;
+
+    uint16_t step = dist >> DRUM_DECEL_SHIFT;
+    if (step < floorStep)     step = floorStep;
     if (step > DRUM_MAX_STEP) step = DRUM_MAX_STEP;
 
     bool settling = (dist == 0 || step >= dist);
@@ -1071,15 +1115,9 @@ bool OledMonitorPanel::slideCells(uint8_t scr, const char *cells, uint8_t sig)
     }
 
     if (starting) {
-        // A step this big clicks over instead of crawling.
         if (starting + alreadyTurning > ANIM_MAX_CELLS) { abortDrum(scr); return false; }
 
-        uint8_t inFlight = 0;
-        for (uint8_t i = 0; i < SCR_COUNT; i++) {
-            uint8_t m = _drumMoving[i];
-            while (m) { inFlight++; m &= (uint8_t)(m - 1); }
-        }
-        if (inFlight + starting > ANIM_CELLS_IN_FLIGHT) { abortDrum(scr); return false; }
+        if (cellsInFlight() + starting > ANIM_CELLS_IN_FLIGHT) { abortDrum(scr); return false; }
     }
 
     // Direction is taken from the value as a whole, never per cell: across a

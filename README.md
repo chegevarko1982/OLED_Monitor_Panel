@@ -158,27 +158,49 @@ from the board**. Nothing in the settings dialog warns about this.
 
 #### When a change does not animate
 
-A transition is snapped rather than rolled when rolling would be meaningless:
+A transition is snapped rather than rolled only when rolling would be
+meaningless:
 
 - into or out of the dashes - radio altimeter above 2500 ft, DME with no
   station tuned, any managed screen showing `---`;
-- during Light Test;
-- when the step moves more than three digits at once - `09900` to `10000` has
-  nothing to roll through and clicks over. Three rather than two because a
-  carry needs all three: counting a 3-digit screen one step at a time, the
-  leading digit never changes on its own, so a lower cap would keep it from
-  ever animating;
-- when a digit at rest would have to start turning and three are already
-  turning anywhere on the panel. Re-aiming a wheel that is already in motion is free
-  and never snaps - that is the case a knob being turned quickly produces. That is the hard
-  ceiling and it is arithmetic, not taste: one digit's frame costs 7.1 ms and
-  the firmware draws one per 12 ms period, so N digits rolling for F frames
-  share the frame period between them: one digit turns in about 96 ms, two in
-  190 ms, three in 290 ms. Past three the wheels visibly lag the value they are
-  chasing, so those screens snap instead.
+- during Light Test, and on the first value after it.
 
-Two screens each moving one digit cost exactly what one screen moving two does -
-the budget counts digits, not screens.
+There is no longer a cap on how many digits may turn. Any number of them, on
+any number of screens, roll together - including a full five-digit carry on the
+altitude screen, `09900` to `10000`.
+
+#### What that costs, and why it is nearly free
+
+The firmware draws exactly one digit per 12 ms frame period, whatever else is
+moving. So the load does not depend on how many wheels are turning:
+
+| | 1 digit turning | 28 digits turning |
+|---|---|---|
+| longest stretch with serial blocked | 7.1 ms | 7.1 ms |
+| bus busy | 59 % | 59 % |
+| RAM | 120 B | 120 B |
+
+7.1 ms against 22 ms of serial buffering, and the RAM is allocated for all
+five cells of all eight screens whether they turn or not.
+
+What *does* grow with the number of wheels is how long they take to settle,
+because they share those 12 ms slots between them. That is paid for by turning
+each wheel in coarser steps the more of them are moving, so the settle time
+stays roughly flat instead of growing in proportion:
+
+| digits turning at once | settle time | if the step never coarsened |
+|---|---|---|
+| 1 | 96 ms | 96 ms |
+| 2 | 132 ms | 192 ms |
+| 3 | 156 ms | 288 ms |
+| 5 - a full ALT carry | 180 ms | 480 ms |
+| 12 - four screens at once | 348 ms | 1152 ms |
+
+A wheel never turns in fewer than two steps, so the coarsest case is still a
+roll and not a click. The earlier firmware took the other route - it refused to
+animate past three digits and snapped them instead - and with every screen
+enabled a fourth moving digit somewhere on the panel is the common case, not a
+rare one. That was the "some digits roll, some click" behaviour.
 
 ### Aircraft profile
 
