@@ -53,6 +53,64 @@ bool MFCustomDevice::getStringFromMem(uint16_t addrMem, char *buffer, bool confi
     return true;
 }
 
+/* **********************************************************************************
+    Helpers for the optional "Additional Config" string of the custom device.
+    Syntax: ANIM=<RA|DME|ALL|OFF>[,...]|FRAMES=<2..8>
+    Key order does not matter, keys and values are case insensitive.
+    An empty or absent config string means animation off.
+********************************************************************************** */
+
+// strips leading and trailing spaces, modifies the buffer in place
+static char *trimSpaces(char *s)
+{
+    while (*s == ' ')
+        s++;
+    char *end = s;
+    while (*end)
+        end++;
+    while (end > s && *(end - 1) == ' ')
+        *(--end) = 0x00;
+    return s;
+}
+
+// parses a plain decimal number and checks it against the allowed frame range
+static bool parseFrames(const char *s, uint8_t *frames)
+{
+    if (*s == 0x00) return false;
+    uint16_t value = 0;
+    while (*s) {
+        if (*s < '0' || *s > '9') return false;
+        value = value * 10 + (uint8_t)(*s - '0');
+        if (value > ANIM_FRAMES_MAX) return false;
+        s++;
+    }
+    if (value < ANIM_FRAMES_MIN) return false;
+    *frames = (uint8_t)value;
+    return true;
+}
+
+// parses the comma separated screen list of the ANIM key into a SCR_* bit mask
+static bool parseAnimList(char *list, uint8_t *mask)
+{
+    char *state = NULL;
+    char *token = strtok_r(list, ",", &state);
+    if (token == NULL) return false; // "ANIM=" without any value
+    while (token != NULL) {
+        token = trimSpaces(token);
+        // the _P variants keep the keywords in flash instead of RAM
+        if (strcasecmp_P(token, PSTR("RA")) == 0)
+            *mask |= ANIM_RADIO_ALT;
+        else if (strcasecmp_P(token, PSTR("DME")) == 0)
+            *mask |= ANIM_VOR_DME;
+        else if (strcasecmp_P(token, PSTR("ALL")) == 0)
+            *mask |= (ANIM_RADIO_ALT | ANIM_VOR_DME);
+        else if (strcasecmp_P(token, PSTR("OFF")) != 0) // "OFF" adds no bits
+            return false;
+        token = strtok_r(NULL, ",", &state);
+    }
+    return true;
+}
+
 MFCustomDevice::MFCustomDevice()
 {
     _initialized = false;
@@ -110,23 +168,42 @@ void MFCustomDevice::attach(uint16_t adrPin, uint16_t adrType, uint16_t adrConfi
         _addrI2C  = atoi(params);
 
         /* **********************************************************************************
-            Read the configuration from the EEPROM, copy it into a buffer.
+            Read the configuration from the EEPROM, copy it into a buffer and evaluate it.
+            The pin string above is already evaluated into _addrI2C, so the buffer can be
+            reused here. An empty or missing config string keeps animation switched off,
+            which is the behaviour of all boards configured before this option existed.
         ********************************************************************************** */
-        // getStringFromMem(adrConfig, parameter, configFromFlash);
-        /* **********************************************************************************
-            Split the config up into single parameter. As the number of parameters could be
-            different between multiple devices, it is done here.
-            This is just an example how to process the init string. Do NOT use
-            "," or ";" as delimiter for multiple parameters but e.g. "|"
-            For most customer devices it is not required.
-            In this case just delete the following
-        ********************************************************************************** */
-        // uint16_t Parameter1;
-        // char    *Parameter2;
-        // params     = strtok_r(parameter, "|", &p);
-        // Parameter1 = atoi(params);
-        // params     = strtok_r(NULL, "|", &p);
-        // Parameter2 = params;
+        uint8_t _animMask   = 0;
+        uint8_t _animFrames = ANIM_FRAMES_DEFAULT;
+
+        parameter[0] = 0x00;
+        if (adrConfig > 0 && getStringFromMem(adrConfig, parameter, configFromFlash) && parameter[0] != 0x00) {
+            uint8_t mask   = 0;
+            uint8_t frames = ANIM_FRAMES_DEFAULT;
+            bool    valid  = true;
+
+            params = strtok_r(parameter, "|", &p);
+            while (params != NULL && valid) {
+                char *key = trimSpaces(params);
+                if (*key != 0x00) { // ignore empty sections like "ANIM=RA||FRAMES=4"
+                    if (strncasecmp_P(key, PSTR("ANIM="), 5) == 0)
+                        valid = parseAnimList(key + 5, &mask);
+                    else if (strncasecmp_P(key, PSTR("FRAMES="), 7) == 0)
+                        valid = parseFrames(trimSpaces(key + 7), &frames);
+                    else
+                        valid = false; // unknown key
+                }
+                params = strtok_r(NULL, "|", &p);
+            }
+
+            if (valid) {
+                _animMask   = mask;
+                _animFrames = frames;
+            } else {
+                // fall back to animation off, a silently half applied option is worse
+                cmdMessenger.sendCmd(kStatus, F("Custom Device: bad Config, expected ANIM=RA,DME|FRAMES=4"));
+            }
+        }
 
         /* **********************************************************************************
             Next call the constructor of your custom device
@@ -135,7 +212,7 @@ void MFCustomDevice::attach(uint16_t adrPin, uint16_t adrType, uint16_t adrConfi
         // In most cases you need only one of the following functions
         // depending on if the constuctor takes the variables or a separate function is required
         _panel = new (allocateMemory(sizeof(OledMonitorPanel))) OledMonitorPanel();
-        _panel->attach(_addrI2C);
+        _panel->attach(_addrI2C, _animMask, _animFrames);
         // if your custom device does not need a separate begin() function, delete the following
         // or this function could be called from the custom constructor or attach() function
         _panel->begin();

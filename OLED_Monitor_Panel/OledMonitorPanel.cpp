@@ -163,6 +163,34 @@ static bool updateValue(char *dst, uint8_t dstSize, const char *src)
 }
 
 /*
+  Slide animation tuning, both straight off the bench numbers.
+
+  One cell's slide frame - clear the rectangle, rasterise two glyphs into it,
+  push it once - measured 7.1 ms on this board. At a 25 ms frame period two
+  moving cells cost 14.3 ms and leave ~10 ms for serial RX and the encoders.
+  Three cells (21.4 ms) formally fit and leave no margin at all, so anything
+  moving more than two cells snaps instead of sliding.
+
+  Two is not a compromise in practice: in a counter only the low digit moves
+  fast. Descending at 700 fpm the RADIO ALT units change every ~85 ms, the
+  tens every ~850 ms and the hundreds once every 8.5 s, so two cells only ever
+  move together across a carry.
+*/
+#define ANIM_FRAME_MS  25
+#define ANIM_MAX_CELLS 2
+
+// _slideScr when nothing is animating.
+static const uint8_t SLIDE_IDLE = 0xFF;
+
+/*
+  Marker written into _shadow[] for a cell whose content is no longer known -
+  an aborted slide left half a glyph there. Chosen because it can never equal
+  a digit or the '-' padLeftRanged() produces, so renderCells() is guaranteed
+  to clear and redraw exactly that cell.
+*/
+static const char CELL_UNKNOWN = (char)0xFF;
+
+/*
   Scratch column buffer for fastDrawDigit(). File-scope rather than a class
   member: it only ever holds one glyph's worth of columns while that
   function runs, so there is nothing to gain from giving every instance its
@@ -244,16 +272,27 @@ OledMonitorPanel::OledMonitorPanel()
     _initialised = false;
     _currentChannel = 0xFF;
     _dirty = 0;
+    _animMask = 0;
+    _animFrames = ANIM_FRAMES_DEFAULT;
+    _slideScr = SLIDE_IDLE;
+    _slideMask = 0;
     // Nothing has been drawn yet, so no shadow describes any screen. The
     // device pool this object is placement-new'd into happens to be zeroed,
     // but renderCells() correctness should not rest on that.
     memset(_shadowSig, 0, sizeof(_shadowSig));
 }
 
-void OledMonitorPanel::attach(uint8_t addrI2C)
+void OledMonitorPanel::attach(uint8_t addrI2C, uint8_t animMask, uint8_t frames)
 {
     _addrI2C = addrI2C;
     _currentChannel = 0xFF;
+    _animMask   = animMask;
+    // Clamped here rather than trusted: the value comes from a free-text
+    // Config string, and 0 would divide by zero in slideOffset().
+    _animFrames = frames < ANIM_FRAMES_MIN ? ANIM_FRAMES_MIN
+                : frames > ANIM_FRAMES_MAX ? ANIM_FRAMES_MAX
+                                           : frames;
+    _slideScr   = SLIDE_IDLE;
     Wire.begin();
     Wire.setClock(400000);
     if (!FitInMemory(sizeof(OLEDInterface))) {
@@ -337,7 +376,8 @@ void OledMonitorPanel::begin()
     updateDisplayAux();
 
     // All eight screens were just drawn above - nothing pending yet.
-    _dirty = 0;
+    _dirty    = 0;
+    _slideScr = SLIDE_IDLE;
 
     // Every screen above was fully repainted by an updateDisplayXxx() call,
     // not renderCells(), so no shadow reflects what is actually on screen.
@@ -349,6 +389,7 @@ void OledMonitorPanel::detach()
     if (!_initialised)
         return;
     _initialised = false;
+    _slideScr    = SLIDE_IDLE;
 }
 
 void OledMonitorPanel::set(int16_t messageID, char *message)
@@ -504,6 +545,41 @@ void OledMonitorPanel::update()
 {
     if (!_initialised)
         return;
+
+    if (_slideScr != SLIDE_IDLE) {
+        if (_dirty & (uint8_t)(1 << _slideScr)) {
+            // A new value supersedes the slide outright - no queueing, no
+            // chaining, the screen goes straight to what the sim last sent.
+            // Repainted right here instead of being left in _dirty for a
+            // later call: abortSlide() has just marked the moving cells
+            // unknown, and until they are redrawn the panel is showing two
+            // half glyphs.
+            uint8_t scr = _slideScr;
+            abortSlide();
+            _dirty &= ~((uint8_t)1 << scr);
+            renderScreen(scr);
+            return;
+        }
+
+        // Frame clock, deliberately NOT MF_CUSTOMDEVICE_POLL_MS. That define
+        // throttles the whole of update(), so it would also delay ordinary
+        // repaints of the six unanimated screens by up to a frame period and
+        // stretch a Light Test burst of eight screens to 200 ms of wall
+        // clock. Gating only the slide leaves every other path exactly as it
+        // was.
+        //
+        // Clocked from now rather than from _lastFrameMs + ANIM_FRAME_MS: if
+        // update() was starved (a full repaint is 55 ms, more than two frame
+        // periods) the catch-up form would then fire several 14 ms frames
+        // back to back, which is precisely the burst the budget exists to
+        // prevent. Losing a little smoothness beats losing the margin.
+        if ((uint32_t)(millis() - _lastFrameMs) >= ANIM_FRAME_MS) {
+            _lastFrameMs = millis();
+            slideStep();
+            return; // one slide frame is the whole budget for this call
+        }
+    }
+
     if (!_dirty)
         return;
 
@@ -588,6 +664,11 @@ void OledMonitorPanel::blankAllDisplays(void)
 
     // The framebuffer no longer matches any shadow's idea of what is drawn.
     memset(_shadowSig, 0, sizeof(_shadowSig));
+
+    // Drop any slide too. set() clears _dirty on shutdown, so update() would
+    // never see the abort condition and would happily keep drawing frames
+    // onto a screen that was just blanked.
+    _slideScr = SLIDE_IDLE;
 }
 
 /*
@@ -601,9 +682,16 @@ void OledMonitorPanel::blankAllDisplays(void)
 
   Baseline is always row DIGIT_BASELINE_Y on this panel, so it is not a
   parameter - every digit cell on every screen shares one baseline.
+
+  `yShift` moves the glyph down (positive) or up (negative) from that
+  baseline, which is all the slide animation needs. Clipping to the cell is
+  free and needs no extra work: the page loop below only ever runs over
+  [page0, page0 + pages), and a glyph row that falls outside the shifted band
+  simply fails the `gr` range test, so a glyph shifted a whole cell height
+  writes nothing at all. Defaulted, so every existing call site is unchanged.
 */
 void OledMonitorPanel::fastDrawDigit(uint8_t cursorX, uint8_t page0, uint8_t pages,
-                                      const GFXfont *font, char c)
+                                      const GFXfont *font, char c, int16_t yShift)
 {
     GFXglyph *g  = &(((GFXglyph *)pgm_read_ptr(&font->glyph))[c - pgm_read_byte(&font->first)]);
     uint8_t  *bm = (uint8_t *)pgm_read_ptr(&font->bitmap);
@@ -625,7 +713,7 @@ void OledMonitorPanel::fastDrawDigit(uint8_t cursorX, uint8_t page0, uint8_t pag
 
     uint8_t *fb = oled->getBuffer();
 
-    int16_t topRow = (int16_t)DIGIT_BASELINE_Y + yo - (int16_t)page0 * 8; // glyph top, relative to page0
+    int16_t topRow = (int16_t)DIGIT_BASELINE_Y + yo - (int16_t)page0 * 8 + yShift; // glyph top, relative to page0
 
     for (uint8_t p = 0; p < pages; p++) {
         memset(colbuf, 0, gw);
@@ -728,6 +816,166 @@ void OledMonitorPanel::commitCells(uint8_t scr, const char *cells, uint8_t sig)
     _shadowSig[scr] = sig;
 }
 
+/*
+  How far the outgoing digit has travelled, in pixels, by frame `frame` of
+  `frames` across a cell `h` pixels tall. Returns 0..h.
+
+  Smoothstep (3t^2 - 2t^3) in Q8 fixed point: the digit starts and ends at
+  rest, which is how a drum on a shaft actually moves, and unlike a linear
+  ramp it does not stop dead at the end of the travel. Integer only, on
+  purpose - the Pico version of this panel keeps float position/velocity per
+  cell and eases with t*t*t, and on AVR every one of those is a softfloat
+  call. This is one 16x16 and one 32x16 multiply, ~12 us against the 7.1 ms
+  the frame itself costs, so a PROGMEM easing table would save nothing and
+  would have to be re-indexed for every frame count in 2..8 besides.
+*/
+static uint8_t slideOffset(uint8_t frame, uint8_t frames, uint8_t h)
+{
+    uint16_t t = ((uint16_t)frame << 8) / frames;                     // 0..256, Q8
+    uint16_t e = (uint16_t)(((uint32_t)t * t * (768 - 2 * t)) >> 16); // 0..256, Q8
+    return (uint8_t)(((uint16_t)e * h) >> 8);
+}
+
+/*
+  Draws one frame of the slide in flight and, on the last frame, ends it.
+
+  Both glyphs go straight into the framebuffer - no intermediate canvas.
+  Clipping to the cell rectangle is done by fastDrawDigit() refusing to write
+  outside [page0, page0 + pages), so the halves that have left the cell cost
+  nothing to hide. One displayRegion() per moving cell; the whole frame is
+  costed in the ANIM_MAX_CELLS comment above.
+*/
+void OledMonitorPanel::slideStep(void)
+{
+    uint8_t scr = _slideScr;
+
+    CellGeom geom;
+    memcpy_P(&geom, &cellGeomTable[scr], sizeof(CellGeom));
+    const GFXfont *font = fontForIndex(geom.fontIdx);
+
+    uint8_t h    = geom.pages * 8;
+    bool    last = (++_slideFrame >= _animFrames);
+    uint8_t off  = last ? h : slideOffset(_slideFrame, _animFrames, h);
+
+    // The incoming digit follows one whole cell height behind the outgoing
+    // one, so at off == 0 it is entirely outside the rectangle and at
+    // off == h the outgoing one is - which is what makes the pair read as two
+    // positions on the same drum rather than as a crossfade.
+    int16_t outShift = _slideUp ? -(int16_t)off : (int16_t)off;
+    int16_t inShift  = _slideUp ? (int16_t)(h - off) : (int16_t)off - (int16_t)h;
+
+    setTCAChannel(geom.channel);
+    for (uint8_t i = 0; i < geom.digits; i++) {
+        if (!(_slideMask & (uint8_t)(1 << i))) continue;
+
+        uint8_t cursorX = geom.x + i * geom.advance;
+        uint8_t blitX   = cursorX + 2;
+
+        clearCell(blitX, geom.page0, geom.pages, geom.blitW);
+        // On the last frame the outgoing glyph is a full cell height away and
+        // would write nothing, so skip its ~1.2 ms rather than rasterise it
+        // into the clip test.
+        if (!last)
+            fastDrawDigit(cursorX, geom.page0, geom.pages, font, _shadow[scr][i], outShift);
+        fastDrawDigit(cursorX, geom.page0, geom.pages, font, _slideTo[i], inShift);
+        oled->displayRegion(blitX, geom.page0, geom.blitW, geom.pages);
+    }
+
+    if (last) {
+        // Those cells now hold exactly _slideTo, so the shadow describes the
+        // panel again and the next value can take the ordinary partial path.
+        for (uint8_t i = 0; i < geom.digits; i++) {
+            if (_slideMask & (uint8_t)(1 << i)) _shadow[scr][i] = _slideTo[i];
+        }
+        _slideScr = SLIDE_IDLE;
+    }
+}
+
+/*
+  Ends the slide in flight without finishing it, leaving the shadow honest
+  about what that did to the panel.
+*/
+void OledMonitorPanel::abortSlide(void)
+{
+    uint8_t scr = _slideScr;
+    _slideScr = SLIDE_IDLE;
+    if (scr >= SCR_COUNT) return;
+
+    // Mid-slide those cells hold half of each glyph, which no character
+    // describes - so poison them rather than pretending they still hold the
+    // old digit. The alternative, dropping _shadowSig, would force a 55 ms
+    // full repaint; this costs the caller one ordinary cell redraw each,
+    // because CELL_UNKNOWN can never compare equal to the incoming character.
+    for (uint8_t i = 0; i < sizeof(_shadow[0]) - 1; i++) {
+        if (_slideMask & (uint8_t)(1 << i)) _shadow[scr][i] = CELL_UNKNOWN;
+    }
+}
+
+/*
+  Starts an odometer slide for `scr` if this transition is one worth
+  animating, and draws its first frame. Returns true when it took the screen
+  over - the caller must then do nothing else this update. Returns false for
+  everything else, which drops the caller straight back onto the ordinary
+  renderCells() / full-repaint path with nothing changed.
+
+  Call it immediately before renderCells(), with the same cells/sig.
+*/
+bool OledMonitorPanel::slideCells(uint8_t scr, const char *cells, uint8_t sig)
+{
+    if (!(_animMask & (uint8_t)(1 << scr))) return false; // opt-in, and off by default
+    if (lightTestOn == 1) return false;
+    if (_slideScr != SLIDE_IDLE) return false;            // one slide in flight at a time
+    if (!_initialised || scr >= SCR_COUNT) return false;
+
+    CellGeom geom;
+    memcpy_P(&geom, &cellGeomTable[scr], sizeof(CellGeom));
+
+    // Everything renderCells() would refuse on has to be refused here too: a
+    // slide animates from _shadow, so it is only meaningful when the shadow
+    // is known to describe the panel.
+    if (geom.digits == 0 || geom.digits >= sizeof(_slideTo)) return false;
+    if (sig == 0 || _shadowSig[scr] != sig) return false;
+    if (strlen(cells) != geom.digits) return false;
+
+    uint8_t mask = 0, moving = 0;
+    for (uint8_t i = 0; i < geom.digits; i++) {
+        char from = _shadow[scr][i];
+        char to   = cells[i];
+        // The dash fields padLeftRanged() produces (RADIO ALT above 2500 ft,
+        // VOR DME with no station tuned) and the CELL_UNKNOWN an aborted
+        // slide leaves behind are not positions on a drum, so there is
+        // nothing to roll into or out of. Snap the whole screen.
+        if (from < '0' || from > '9' || to < '0' || to > '9') return false;
+        if (from == to) continue;
+        mask |= (uint8_t)(1 << i);
+        moving++;
+    }
+    if (moving == 0) return false;             // nothing moved - let renderCells() no-op
+    if (moving > ANIM_MAX_CELLS) return false; // past the measured frame budget; also
+                                               // reads right, a small step scrolls and
+                                               // a jump clicks over
+
+    // Direction is taken from the value as a whole, never per cell: across a
+    // carry (350 -> 349) the units rise while the tens fall, and rolling the
+    // two opposite ways in the same frame looks like a fault rather than a
+    // counter. Both strings are the same length and all digits by now, so the
+    // byte compare IS the numeric compare - no strtol, no overflow to think
+    // about.
+    _slideUp    = (memcmp(cells, _shadow[scr], geom.digits) > 0);
+    _slideScr   = scr;
+    _slideMask  = mask;
+    _slideFrame = 0;
+    memcpy(_slideTo, cells, geom.digits);
+    _slideTo[geom.digits] = '\0';
+
+    // First frame now, not up to a frame period from now: the value has
+    // already changed and the screen should start moving on the same update()
+    // an unanimated screen would have snapped on.
+    _lastFrameMs = millis();
+    slideStep();
+    return true;
+}
+
 /*******************************************
 Has to be redone, only tests
 
@@ -812,6 +1060,15 @@ void OledMonitorPanel::updateDisplayAux(void) // добавил 8й экран
         oled->println("888");
         oled->fillCircle(104, 40, 3, SSD1306_WHITE);
         oled->display();
+        // The panel now shows the test pattern, which no shadow describes.
+        // Leaving the old entry in place is not neutral: when light test goes
+        // off again the value is usually unchanged, so every cell would
+        // compare equal to the shadow, renderCells() would draw nothing and
+        // report success, and the 888s would stay on the panel until the
+        // value next moved. Every branch that paints a screen without a
+        // matching commitCells() does this - see the _shadowSig comment in
+        // the header.
+        _shadowSig[SCR_AUX] = 0;
         return;
     }
 
@@ -850,6 +1107,7 @@ void OledMonitorPanel::updateDisplayEfisLeft(void)
         oled->println("888");
         oled->fillCircle(104, 40, 3, SSD1306_WHITE);
         oled->display();
+        _shadowSig[SCR_EFIS_LEFT] = 0; // test pattern on screen - see updateDisplayAux()
         return;
     }
 
@@ -868,8 +1126,8 @@ void OledMonitorPanel::updateDisplayEfisLeft(void)
 
     if (fcuSpeedManagedMode == 1) {
         // Managed dashes use a different font/x (and a dot) - not the cell
-        // layout, so this always takes the full repaint and never touches
-        // the shadow.
+        // layout, so this always takes the full repaint.
+        _shadowSig[SCR_EFIS_LEFT] = 0; // dashes on screen - see updateDisplayAux()
         renderLabelValue(TCA9548A_CHANNEL_EFIS_LEFT,
                           labelText, 13, &FreeSans6pt7b,
                           "---", 26, 55, &DSEG7Classic_Regular16pt7b,
@@ -910,6 +1168,7 @@ void OledMonitorPanel::updateDisplayEfisRight(void)
         oled->println("888");
         oled->fillCircle(104, 40, 3, SSD1306_WHITE);
         oled->display();
+        _shadowSig[SCR_EFIS_RIGHT] = 0; // test pattern on screen - see updateDisplayAux()
         return;
     }
 
@@ -922,6 +1181,10 @@ void OledMonitorPanel::updateDisplayEfisRight(void)
     // Nothing besides lightTestOn changes this screen's layout.
     uint8_t sig = 0x80;
 
+    // The sim drives this one, not the pilot's hand, so it is one of the two
+    // screens the odometer slide is offered on. Off unless the Config string
+    // asked for it - see slideCells().
+    if (slideCells(SCR_EFIS_RIGHT, strHdgValue3, sig)) return;
     if (renderCells(SCR_EFIS_RIGHT, strHdgValue3, sig)) return;
 
     renderLabelValue(TCA9548A_CHANNEL_EFIS_RIGHT,
@@ -948,6 +1211,7 @@ void OledMonitorPanel::updateDisplayFcuSpd(void)
         oled->println("888");
         oled->fillCircle(104, 40, 3, SSD1306_WHITE);
         oled->display();
+        _shadowSig[SCR_FCU_SPD] = 0; // test pattern on screen - see updateDisplayAux()
         return;
     }
 
@@ -974,8 +1238,8 @@ void OledMonitorPanel::updateDisplayFcuSpd(void)
 
     if (fcuSpeedManagedMode == 1) {
         // Managed dashes use a different font/x (and a dot) - not the cell
-        // layout, so this always takes the full repaint and never touches
-        // the shadow.
+        // layout, so this always takes the full repaint.
+        _shadowSig[SCR_FCU_SPD] = 0; // dashes on screen - see updateDisplayAux()
         renderLabelValue(TCA9548A_CHANNEL_FCU_SPD,
                           labelText, labelY, &FreeSans6pt7b,
                           "---", 26, 55, &DSEG7Classic_Regular16pt7b,
@@ -1016,13 +1280,14 @@ void OledMonitorPanel::updateDisplayFcuHdg(void)
         oled->println("888");
         oled->fillCircle(104, 40, 3, SSD1306_WHITE);
         oled->display();
+        _shadowSig[SCR_FCU_HDG] = 0; // test pattern on screen - see updateDisplayAux()
         return;
     }
 
     if (fcuHdgManagedMode == 1) {
         // Managed dashes use a different font/x (and a dot) - not the cell
-        // layout, so this always takes the full repaint and never touches
-        // the shadow.
+        // layout, so this always takes the full repaint.
+        _shadowSig[SCR_FCU_HDG] = 0; // dashes on screen - see updateDisplayAux()
         renderLabelValue(TCA9548A_CHANNEL_FCU_HDG,
                           "HDG", 13, &FreeSans7pt7b,
                           "---", 28, 55, &DSEG7Classic_Regular15pt7b,
@@ -1056,9 +1321,9 @@ void OledMonitorPanel::updateDisplayFcuFpa(void)
     if (lightTestOn == 1) {
         // Light test reuses this screen's normal layout (only the digits
         // differ), but every other screen skips the partial path during
-        // light test, so do the same here for consistency and leave the
-        // shadow invalid.
+        // light test, so do the same here for consistency.
         copyValue(strAltValue2, sizeof(strAltValue2), "8888");
+        _shadowSig[SCR_FCU_FPA] = 0; // test pattern on screen - see updateDisplayAux()
         renderLabelValue(TCA9548A_CHANNEL_FCU_FPA,
                           "RADIO ALT", 15, &FreeSans7pt7b,
                           strAltValue2, 6, 55, &DSEG7Classic_Regular18pt7b,
@@ -1072,6 +1337,9 @@ void OledMonitorPanel::updateDisplayFcuFpa(void)
     padLeftRanged(strAltValue2, 4, efisRightBaroValueHg, 0, 2500);
     uint8_t sig = 0x80;
 
+    // Counting down on approach is the case the odometer slide was written
+    // for. Off unless the Config string asked for it - see slideCells().
+    if (slideCells(SCR_FCU_FPA, strAltValue2, sig)) return;
     if (renderCells(SCR_FCU_FPA, strAltValue2, sig)) return;
 
     // Baseline 15, not 16: at 16 the label inked row 16, which is the first
@@ -1089,6 +1357,7 @@ void OledMonitorPanel::updateDisplayFcuAlt(void)
 
     if (lightTestOn == 1) {
         copyValue(strAltValue, sizeof(strAltValue), "88888");
+        _shadowSig[SCR_FCU_ALT] = 0; // test pattern on screen - see updateDisplayAux()
         renderLabelValue(TCA9548A_CHANNEL_FCU_ALT,
                           "ALT", 15, &FreeSans8pt7b,
                           strAltValue, 1, 55, &DSEG7Classic_Regular16pt7b,

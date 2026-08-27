@@ -5,7 +5,7 @@
     "Type": "OLED_MONITOR_PANEL",
     "Author": "Gagagu/elral/Ernesto",
     "URL": "https://github.com",
-    "Version": "1.0.4"
+    "Version": "1.0.5"
   },
   "Config": {
     "Pins": [],
@@ -15,6 +15,10 @@
         "0x70",
         "0x71"
       ]
+    },
+    "Custom": {
+      "Enabled": true,
+      "Value": ""
     }
   },
   "MessageTypes": [
