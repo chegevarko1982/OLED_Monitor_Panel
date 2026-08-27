@@ -22,10 +22,16 @@ zip_filename = env.GetProjectOption('custom_zip_filename', "")
 def copy_fw_files (source, target, env):
     fw_file_name=str(target[0])
 
-    if os.path.exists("./_build/" + custom_source_folder) == False:
-        os.makedirs("./_build/" + custom_source_folder + "/Community/firmware")
-        shutil.copytree(custom_source_folder + "/Community", "./_build/" + custom_source_folder + "/Community", dirs_exist_ok=True)
-        print("Creating /_build folder")
+    # Rebuild the staging tree from scratch on every build. The upstream
+    # template only populated it when it did not exist yet, which meant a file
+    # deleted from the source Community folder stayed in _build - and therefore
+    # in the shipped ZIP - forever, with nothing in the build log to say so.
+    build_root = "./_build/" + custom_source_folder
+    if os.path.exists(build_root):
+        shutil.rmtree(build_root)
+    os.makedirs(build_root + "/Community/firmware")
+    shutil.copytree(custom_source_folder + "/Community", build_root + "/Community", dirs_exist_ok=True)
+    print("Staging community folder in /_build")
     
     if fw_file_name[-3:] == "bin":
         fw_file_name=fw_file_name[0:-3] + "uf2"
