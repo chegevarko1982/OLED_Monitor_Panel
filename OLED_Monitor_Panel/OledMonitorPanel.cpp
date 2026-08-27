@@ -186,39 +186,59 @@ static bool updateValue(char *dst, uint8_t dstSize, const char *src)
 }
 
 /*
-  Slide animation tuning, both straight off the bench numbers.
+  Drum tuning, off the bench numbers.
 
-  One cell's slide frame - clear the rectangle, rasterise two glyphs into it,
-  push it once - measured 7.1 ms on this board. slideStep() draws exactly one
-  of them per call, so 7.1 ms is also the longest stretch this firmware blocks
-  serial for, whatever else is animating. At 115200 baud the 256-byte receive
-  buffer holds 22 ms, so that leaves a wide margin.
+  One cell's frame - clear the rectangle, rasterise the two visible glyphs
+  into it, push it once - measured 7.1 ms on this board. drumStep() advances
+  exactly one cell per call, so 7.1 ms is also the longest stretch this
+  firmware blocks serial for, whatever else is turning. At 115200 baud the
+  256-byte receive buffer holds 22 ms, so that leaves a wide margin.
 
-  The 12 ms period follows from it: 7.1 of 12 ms is 59 % duty, and 8 frames
-  then span 96 ms - the same roll duration the old 4 frames of 25 ms gave, in
-  steps a quarter the size. A shorter period would not fit one cell.
+  The 12 ms period follows: 7.1 of 12 ms is 59 % duty, and a one-digit turn
+  lands in roughly 8 steps, so about 96 ms - the roll duration the panel was
+  tuned to, in steps a quarter the size of the old four-frame slide.
 
-  ANIM_MAX_CELLS still caps how many digits may move in one transition. It is
-  not a time budget any more (the cells are spread across frames), it is a
-  judgement: a step small enough to read as a roll moves one or two digits,
-  and 300 -> 299 should click over rather than crawl.
+  DRUM_DECEL_SHIFT gives the wheel its feel: each step closes a quarter of
+  what is left, so it leaves fast and settles softly, the way a drum on a
+  shaft does. DRUM_MIN_STEP stops that tail from crawling - without it the
+  last few 1/256ths would take as long as the whole turn. There is no easing
+  table and no frame counter: a wheel that is retargeted mid-turn simply has
+  further to go, which is why fast input spins it instead of stuttering.
 */
-#define ANIM_FRAME_MS  12
+#define ANIM_FRAME_MS      12
+#define DRUM_DECEL_SHIFT   2
+
+/*
+  Ceiling on how far a wheel may turn in one step, in 1/256ths of a digit.
+  Re-aiming a wheel that is already turning makes the remaining distance
+  larger, and the proportional step larger with it - which is what makes a
+  spun knob spin the drum instead of stuttering. Without a ceiling a big jump
+  would move most of a digit in one 12 ms step and read as a teleport rather
+  than as motion. 128 is half a digit per step, so a whole revolution takes
+  about 20 steps to catch up. It never binds on the ordinary one- or
+  two-digit change, whose first step is 64 and 128.
+*/
+#define DRUM_MAX_STEP      128
+
+// A digit wheel carries 0..9; positions are Q8 in digit units.
+#define DRUM_DIGITS 10
+#define DRUM_SPAN   (DRUM_DIGITS * 256)
+
+/*
+  How many digits a single transition may move. A step small enough to read as
+  a roll moves one or two; 300 -> 299 turns all three and should click over
+  instead of crawling.
+*/
 #define ANIM_MAX_CELLS 2
 
 /*
-  How many digit cells may be rolling at once across the whole panel.
+  How many digit cells may be turning at once across the whole panel.
 
-  This is the hard ceiling, and it is arithmetic rather than taste. One cell
-  frame costs 7.1 ms and slideStep() draws one per frame period, so N cells
-  rolling for F frames take N * F * ANIM_FRAME_MS of wall clock. Holding an
-  8-frame roll near 100 ms therefore allows N * 8 * 7.1 <= 100, i.e. N <= 1.7.
-
-  Two is the practical setting: one cell rolls in 96 ms, two share the frames
-  and take ~192 ms, and a third would push every roll past the point where the
-  sim has already sent the next value. Screens beyond the cap snap through
-  renderCells() - the same thing that used to happen to every screen but the
-  first, now only under genuine load.
+  Arithmetic, not taste. One cell step costs 7.1 ms and drumStep() does one per
+  frame period, so N cells turning share the period between them: a one-digit
+  turn that takes ~96 ms alone takes ~192 ms with two in flight. A third would
+  push every turn past the point where the sim has already sent the next value.
+  Screens beyond the cap snap through renderCells().
 */
 #define ANIM_CELLS_IN_FLIGHT 2
 
@@ -318,10 +338,10 @@ OledMonitorPanel::OledMonitorPanel()
     _dirty = 0;
     _animMask = 0;
     _animFrames = ANIM_FRAMES_DEFAULT;
-    _slideActive = 0;
-    _slideCursor = 0;
-    _slideUp     = 0;
-    memset(_slidePending, 0, sizeof(_slidePending));
+    _drumActive = 0;
+    _drumCursor = 0;
+    _drumUp     = 0;
+    memset(_drumMoving, 0, sizeof(_drumMoving));
     // Nothing has been drawn yet, so no shadow describes any screen. The
     // device pool this object is placement-new'd into happens to be zeroed,
     // but renderCells() correctness should not rest on that.
@@ -334,11 +354,11 @@ void OledMonitorPanel::attach(uint8_t addrI2C, uint8_t animMask, uint8_t frames)
     _currentChannel = 0xFF;
     _animMask   = animMask;
     // Clamped here rather than trusted: the value comes from a free-text
-    // Config string, and 0 would divide by zero in slideOffset().
+    // Config string, and 0 would divide by zero in drumStep().
     _animFrames = frames < ANIM_FRAMES_MIN ? ANIM_FRAMES_MIN
                 : frames > ANIM_FRAMES_MAX ? ANIM_FRAMES_MAX
                                            : frames;
-    _slideActive = 0;
+    _drumActive = 0;
     Wire.begin();
     Wire.setClock(400000);
     if (!FitInMemory(sizeof(OLEDInterface))) {
@@ -422,8 +442,9 @@ void OledMonitorPanel::begin()
     updateDisplayAux();
 
     // All eight screens were just drawn above - nothing pending yet.
-    _dirty       = 0;
-    _slideActive = 0;
+    _dirty      = 0;
+    _drumActive = 0;
+    memset(_drumMoving, 0, sizeof(_drumMoving));
 
     // Every screen above was fully repainted by an updateDisplayXxx() call,
     // not renderCells(), so no shadow reflects what is actually on screen.
@@ -435,7 +456,7 @@ void OledMonitorPanel::detach()
     if (!_initialised)
         return;
     _initialised = false;
-    _slideActive = 0;
+    _drumActive  = 0;
 }
 
 void OledMonitorPanel::set(int16_t messageID, char *message)
@@ -592,21 +613,12 @@ void OledMonitorPanel::update()
     if (!_initialised)
         return;
 
-    // A new value for a screen supersedes any slide on that screen outright -
-    // no queueing, no chaining, it goes straight to what the sim last sent.
-    // Repainted here rather than left in _dirty for a later call: abortSlide()
-    // has just marked the moving cells unknown, and until they are redrawn the
-    // panel is showing half glyphs.
-    uint8_t collide = _dirty & _slideActive;
-    if (collide) {
-        uint8_t scr = __builtin_ctz(collide);
-        abortSlide(scr);
-        _dirty &= ~((uint8_t)1 << scr);
-        renderScreen(scr);
-        return;
-    }
-
-    if (_slideActive) {
+    // A new value for a screen that is already turning needs no special case
+    // here at all: it goes through renderScreen() like any other, and
+    // slideCells() moves the wheel's target instead of starting over. That is
+    // the difference between a wheel and the fixed-length slide this replaced,
+    // which had to abort - and an aborted roll is what a snapped digit is.
+    if (_drumActive) {
         // Frame clock, deliberately NOT MF_CUSTOMDEVICE_POLL_MS. That define
         // throttles the whole of update(), so it would also delay ordinary
         // repaints of the unanimated screens by up to a frame period and
@@ -621,7 +633,7 @@ void OledMonitorPanel::update()
         // little smoothness beats losing the margin.
         if ((uint32_t)(millis() - _lastFrameMs) >= ANIM_FRAME_MS) {
             _lastFrameMs = millis();
-            slideStep();
+            drumStep();
             return; // one cell is the whole budget for this call
         }
     }
@@ -711,11 +723,11 @@ void OledMonitorPanel::blankAllDisplays(void)
     // The framebuffer no longer matches any shadow's idea of what is drawn.
     memset(_shadowSig, 0, sizeof(_shadowSig));
 
-    // Drop every slide too. set() clears _dirty on shutdown, so update() would
-    // never see the abort condition and would happily keep drawing frames onto
-    // screens that were just blanked.
-    _slideActive = 0;
-    memset(_slidePending, 0, sizeof(_slidePending));
+    // Stop every wheel too. set() clears _dirty on shutdown, so nothing else
+    // would, and the drum would happily keep turning digits onto screens that
+    // were just blanked.
+    _drumActive = 0;
+    memset(_drumMoving, 0, sizeof(_drumMoving));
 }
 
 /*
@@ -864,210 +876,225 @@ void OledMonitorPanel::commitCells(uint8_t scr, const char *cells, uint8_t sig)
 }
 
 /*
-  How far the outgoing digit has travelled, in pixels, by frame `frame` of
-  `frames` across a cell `h` pixels tall. Returns 0..h.
+  Advances one digit wheel by one step and redraws it - the whole budget for
+  this call, and the reason several cells can turn at once.
 
-  Smoothstep (3t^2 - 2t^3) in Q8 fixed point: the digit starts and ends at
-  rest, which is how a drum on a shaft actually moves, and unlike a linear
-  ramp it does not stop dead at the end of the travel. Integer only, on
-  purpose - the Pico version of this panel keeps float position/velocity per
-  cell and eases with t*t*t, and on AVR every one of those is a softfloat
-  call. This is one 16x16 and one 32x16 multiply, ~12 us against the 7.1 ms
-  the frame itself costs, so a PROGMEM easing table would save nothing and
-  would have to be re-indexed for every frame count in 2..8 besides.
+  Motion is a proportional approach: each step closes DRUM_DECEL_SHIFT worth of
+  the remaining distance, with a floor so the tail cannot crawl. That gives a
+  quick departure and a soft landing without an easing table, and - the part
+  that matters - it has no notion of "frame 3 of 8", so a wheel whose target
+  moves mid-turn just has further to travel. Nothing is ever restarted.
+
+  Wheels are taken in turn from _drumCursor, so a screen the sim drives hard
+  cannot starve the others.
+
+  Rendering is two glyphs straight into the framebuffer, no canvas: the digit
+  the wheel is leaving and the one after it, one cell height apart. Which pair
+  that is falls out of the position, so it works the same turning up or down.
+  Clipping is free - fastDrawDigit() only ever writes pages [page0, page0 +
+  pages), so the parts that have rotated out of the cell cost nothing to hide.
 */
-static uint8_t slideOffset(uint8_t frame, uint8_t frames, uint8_t h)
+void OledMonitorPanel::drumStep(void)
 {
-    uint16_t t = ((uint16_t)frame << 8) / frames;                     // 0..256, Q8
-    uint16_t e = (uint16_t)(((uint32_t)t * t * (768 - 2 * t)) >> 16); // 0..256, Q8
-    return (uint8_t)(((uint16_t)e * h) >> 8);
-}
+    if (!_drumActive) return;
 
-/*
-  Draws one cell of one slide - the whole budget for this call, and the reason
-  several screens can animate at once. A cell frame costs 7.1 ms measured:
-  clear the rectangle, rasterise the outgoing and incoming glyphs into it,
-  push it once. That is the longest stretch this firmware ever blocks serial
-  for, and at 115200 baud the 256-byte receive buffer holds 22 ms - so one
-  cell leaves a wide margin where two did not.
-
-  Screens take turns from _slideCursor rather than the search always starting
-  at 0, so a screen the sim drives hard cannot starve the rest. A screen with
-  two moving cells advances a frame every second turn: it animates alongside
-  the others, just over a longer wall-clock span.
-
-  Both glyphs go straight into the framebuffer, no intermediate canvas.
-  Clipping to the cell is free - fastDrawDigit() only ever writes pages
-  [page0, page0 + pages), so the halves that have left the cell cost nothing
-  to hide.
-*/
-void OledMonitorPanel::slideStep(void)
-{
-    if (!_slideActive) return;
-
-    // Next screen owing a cell this frame, starting after the last one served.
+    // Next screen with a wheel still turning, starting after the last served.
     uint8_t scr = SCR_COUNT;
     for (uint8_t n = 0; n < SCR_COUNT; n++) {
-        uint8_t i = (uint8_t)((_slideCursor + 1 + n) % SCR_COUNT);
-        if (_slidePending[i]) { scr = i; break; }
+        uint8_t i = (uint8_t)((_drumCursor + 1 + n) % SCR_COUNT);
+        if (_drumMoving[i]) { scr = i; break; }
     }
-    if (scr == SCR_COUNT) return;
-    _slideCursor = scr;
+    if (scr == SCR_COUNT) { _drumActive = 0; return; }
+    _drumCursor = scr;
 
-    uint8_t cell = __builtin_ctz(_slidePending[scr]);
-    _slidePending[scr] &= ~((uint8_t)1 << cell);
+    uint8_t cell = __builtin_ctz(_drumMoving[scr]);
 
     CellGeom geom;
     memcpy_P(&geom, &cellGeomTable[scr], sizeof(CellGeom));
     const GFXfont *font = fontForIndex(geom.fontIdx);
 
-    uint8_t h    = geom.pages * 8;
-    bool    last = (_slideFrame[scr] >= _animFrames);
-    uint8_t off  = last ? h : slideOffset(_slideFrame[scr], _animFrames, h);
-    bool    up   = (_slideUp & ((uint8_t)1 << scr)) != 0;
+    bool     up     = (_drumUp & ((uint8_t)1 << scr)) != 0;
+    uint16_t pos    = _drumPos[scr][cell];
+    uint16_t target = (uint16_t)_drumTarget[scr][cell] * 256;
 
-    // The incoming digit follows one whole cell height behind the outgoing
-    // one, so at off == 0 it is entirely outside the rectangle and at off == h
-    // the outgoing one is - which is what makes the pair read as two positions
-    // on one drum rather than as a crossfade.
-    int16_t outShift = up ? -(int16_t)off : (int16_t)off;
-    int16_t inShift  = up ? (int16_t)(h - off) : (int16_t)off - (int16_t)h;
+    // Distance still to travel in the direction of turn, wrapping through 9-0.
+    uint16_t dist = up ? (uint16_t)((target - pos + DRUM_SPAN) % DRUM_SPAN)
+                       : (uint16_t)((pos - target + DRUM_SPAN) % DRUM_SPAN);
+
+    // _animFrames keeps its documented meaning - more frames, slower wheel -
+    // by setting the floor rather than a frame count. 8 gives 24, 2 gives 96.
+    uint8_t  minStep = (uint8_t)(192 / _animFrames);
+    uint16_t step    = dist >> DRUM_DECEL_SHIFT;
+    if (step < minStep)      step = minStep;
+    if (step > DRUM_MAX_STEP) step = DRUM_MAX_STEP;
+
+    bool settling = (dist == 0 || step >= dist);
+    if (settling) {
+        pos = target;
+    } else {
+        pos = up ? (uint16_t)((pos + step) % DRUM_SPAN)
+                 : (uint16_t)((pos + DRUM_SPAN - step) % DRUM_SPAN);
+    }
+    _drumPos[scr][cell] = pos;
+
+    uint8_t h    = geom.pages * 8;
+    uint8_t d0   = (uint8_t)(pos >> 8);              // digit the wheel is leaving
+    uint8_t frac = (uint8_t)(pos & 0x00FF);
+    uint8_t off  = (uint8_t)(((uint16_t)frac * h) >> 8);
 
     uint8_t cursorX = geom.x + cell * geom.advance;
     uint8_t blitX   = cursorX + 2;
 
     setTCAChannel(geom.channel);
     clearCell(blitX, geom.page0, geom.pages, geom.blitW);
-    // On the last frame the outgoing glyph is a full cell height away and
-    // would write nothing, so skip its ~1.2 ms rather than rasterise it into
-    // the clip test.
-    if (!last)
-        fastDrawDigit(cursorX, geom.page0, geom.pages, font, _shadow[scr][cell], outShift);
-    fastDrawDigit(cursorX, geom.page0, geom.pages, font, _slideTo[scr][cell], inShift);
+    fastDrawDigit(cursorX, geom.page0, geom.pages, font, (char)('0' + d0), -(int16_t)off);
+    // At frac == 0 the follower sits a whole cell height away and would write
+    // nothing, so skip its ~1.2 ms rather than rasterise it into the clip test.
+    if (frac)
+        fastDrawDigit(cursorX, geom.page0, geom.pages, font,
+                      (char)('0' + (d0 + 1) % DRUM_DIGITS), (int16_t)(h - off));
     oled->displayRegion(blitX, geom.page0, geom.blitW, geom.pages);
 
-    if (last) _shadow[scr][cell] = _slideTo[scr][cell];
-
-    // Whole frame drawn for this screen: advance it, or retire it.
-    if (_slidePending[scr] == 0) {
-        if (last) {
-            finishSlide(scr);
-        } else {
-            _slideFrame[scr]++;
-            _slidePending[scr] = _slideMask[scr];
-        }
+    if (settling) {
+        // The cell now holds exactly one digit again, so the shadow describes
+        // the panel and the next value for this screen can take the ordinary
+        // partial path.
+        _shadow[scr][cell] = (char)('0' + _drumTarget[scr][cell]);
+        _drumMoving[scr] &= ~((uint8_t)1 << cell);
+        if (_drumMoving[scr] == 0) _drumActive &= ~((uint8_t)1 << scr);
     }
 }
 
 /*
-  Retires a slide that has drawn its last frame. Every moving cell now holds
-  exactly _slideTo, so the shadow describes the panel again and the next value
-  for this screen can take the ordinary partial path.
+  Stops every wheel on a screen without letting it arrive, leaving the shadow
+  honest about what that did to the panel. Only the refusal paths in
+  slideCells() use this - an ordinary new value retargets instead.
 */
-void OledMonitorPanel::finishSlide(uint8_t scr)
-{
-    _slideActive &= ~((uint8_t)1 << scr);
-    _slidePending[scr] = 0;
-}
-
-/*
-  Ends a slide without finishing it, leaving the shadow honest about what that
-  did to the panel.
-*/
-void OledMonitorPanel::abortSlide(uint8_t scr)
+void OledMonitorPanel::abortDrum(uint8_t scr)
 {
     if (scr >= SCR_COUNT) return;
-    if (!(_slideActive & ((uint8_t)1 << scr))) return;
+    if (!(_drumActive & ((uint8_t)1 << scr))) return;
 
-    // Mid-slide those cells hold half of each glyph, which no character
-    // describes - so poison them rather than pretend they still hold the old
-    // digit. The alternative, dropping _shadowSig, would force a 55 ms full
-    // repaint; this costs the caller one ordinary cell redraw each, because
+    // Mid-turn those cells hold halves of two glyphs, which no single
+    // character describes - so poison them rather than pretend they still hold
+    // the old digit. The alternative, dropping _shadowSig, would force a 55 ms
+    // full repaint; this costs one ordinary cell redraw each, because
     // CELL_UNKNOWN can never compare equal to the incoming character.
-    for (uint8_t i = 0; i < sizeof(_shadow[0]) - 1; i++) {
-        if (_slideMask[scr] & ((uint8_t)1 << i)) _shadow[scr][i] = CELL_UNKNOWN;
+    for (uint8_t i = 0; i < MAX_DIGIT_CELLS; i++) {
+        if (_drumMoving[scr] & ((uint8_t)1 << i)) _shadow[scr][i] = CELL_UNKNOWN;
     }
-    _slideActive &= ~((uint8_t)1 << scr);
-    _slidePending[scr] = 0;
+    _drumMoving[scr] = 0;
+    _drumActive &= ~((uint8_t)1 << scr);
 }
 
 /*
-  Starts an odometer slide for `scr` if this transition is one worth
-  animating, and draws its first cell. Returns true when it took the screen
-  over - the caller must then do nothing else this update. Returns false for
-  everything else, which drops the caller back onto the ordinary renderCells()
-  or full-repaint path with nothing changed.
+  Points this screen's digit wheels at `cells`, starting them if they are at
+  rest and simply re-aiming them if they are already turning. Returns true when
+  it took the screen over - the caller must then do nothing else this update.
+  Returns false for everything else, which drops the caller back onto the
+  ordinary renderCells() or full-repaint path with nothing left half-done.
 
   Call it immediately before renderCells(), with the same cells/sig.
 */
 bool OledMonitorPanel::slideCells(uint8_t scr, const char *cells, uint8_t sig)
 {
     if (!(_animMask & (uint8_t)(1 << scr))) return false; // opt-in, and off by default
-    if (lightTestOn == 1) return false;
     if (!_initialised || scr >= SCR_COUNT) return false;
-    if (_slideActive & ((uint8_t)1 << scr)) return false; // already sliding this screen
 
     CellGeom geom;
     memcpy_P(&geom, &cellGeomTable[scr], sizeof(CellGeom));
 
+    bool refuse = false;
+
     // Everything renderCells() would refuse on has to be refused here too: a
-    // slide animates from _shadow, so it is only meaningful when the shadow is
+    // wheel starts from _shadow, so it is only meaningful when the shadow is
     // known to describe the panel.
-    if (geom.digits == 0 || geom.digits >= sizeof(_slideTo[0])) return false;
-    if (sig == 0 || _shadowSig[scr] != sig) return false;
-    if (strlen(cells) != geom.digits) return false;
+    if (lightTestOn == 1) refuse = true;
+    else if (geom.digits == 0 || geom.digits > MAX_DIGIT_CELLS) refuse = true;
+    else if (sig == 0 || _shadowSig[scr] != sig) refuse = true;
+    else if (strlen(cells) != geom.digits) refuse = true;
 
-    uint8_t mask = 0, moving = 0;
-    for (uint8_t i = 0; i < geom.digits; i++) {
-        char from = _shadow[scr][i];
-        char to   = cells[i];
-        // The dash fields padLeftRanged() produces (RADIO ALT above 2500 ft,
-        // VOR DME with no station tuned) and the CELL_UNKNOWN an aborted slide
-        // leaves behind are not positions on a drum, so there is nothing to
-        // roll into or out of. Snap the whole screen.
-        if (from < '0' || from > '9' || to < '0' || to > '9') return false;
-        if (from == to) continue;
-        mask |= (uint8_t)(1 << i);
-        moving++;
-    }
-    if (moving == 0) return false;             // nothing moved - let renderCells() no-op
-    if (moving > ANIM_MAX_CELLS) return false; // a step this big clicks over instead
-
-    // Panel-wide budget. Counting what is already rolling rather than how many
-    // screens are - two screens moving one digit each cost exactly what one
-    // screen moving two does.
-    uint8_t inFlight = 0;
-    for (uint8_t i = 0; i < SCR_COUNT; i++) {
-        if (_slideActive & ((uint8_t)1 << i)) {
-            uint8_t m = _slideMask[i];
-            while (m) { inFlight++; m &= (uint8_t)(m - 1); }
+    if (!refuse) {
+        for (uint8_t i = 0; i < geom.digits; i++) {
+            // The dash fields padLeftRanged() produces (RADIO ALT above 2500
+            // ft, VOR DME with no station tuned) are not positions on a wheel,
+            // so there is nothing to turn to.
+            if (cells[i] < '0' || cells[i] > '9') { refuse = true; break; }
+            // A cell at rest has to start from a digit; one already turning
+            // carries its own position and needs no shadow.
+            if (!(_drumMoving[scr] & ((uint8_t)1 << i))
+                && (_shadow[scr][i] < '0' || _shadow[scr][i] > '9')) { refuse = true; break; }
         }
     }
-    if (inFlight + moving > ANIM_CELLS_IN_FLIGHT) return false;
+
+    if (refuse) {
+        // Hand the screen back intact: a wheel left turning would fight the
+        // repaint that is about to happen.
+        abortDrum(scr);
+        return false;
+    }
+
+    // Where the screen is logically headed right now - the target for a cell
+    // that is turning, the settled digit for one that is not. Direction is
+    // taken from this rather than from _shadow alone, so re-aiming a wheel
+    // mid-turn follows the new change and not the one it started on.
+    char cur[MAX_DIGIT_CELLS + 1];
+    for (uint8_t i = 0; i < geom.digits; i++) {
+        cur[i] = (_drumMoving[scr] & ((uint8_t)1 << i))
+                     ? (char)('0' + _drumTarget[scr][i])
+                     : _shadow[scr][i];
+    }
+    cur[geom.digits] = 0x00;
+
+    int8_t cmp = (int8_t)memcmp(cells, cur, geom.digits);
+    if (cmp == 0) return false; // nothing to aim at - let renderCells() no-op
+
+    // Cells that would have to start from rest, and the panel-wide budget they
+    // have to fit into. Cells already turning cost nothing extra: re-aiming a
+    // wheel is free, it is the turning itself that spends the frame period.
+    uint8_t starting = 0, alreadyTurning = 0;
+    for (uint8_t i = 0; i < geom.digits; i++) {
+        if (_drumMoving[scr] & ((uint8_t)1 << i)) alreadyTurning++;
+        else if (cells[i] != _shadow[scr][i]) starting++;
+    }
+
+    if (starting) {
+        // A step this big clicks over instead of crawling.
+        if (starting + alreadyTurning > ANIM_MAX_CELLS) { abortDrum(scr); return false; }
+
+        uint8_t inFlight = 0;
+        for (uint8_t i = 0; i < SCR_COUNT; i++) {
+            uint8_t m = _drumMoving[i];
+            while (m) { inFlight++; m &= (uint8_t)(m - 1); }
+        }
+        if (inFlight + starting > ANIM_CELLS_IN_FLIGHT) { abortDrum(scr); return false; }
+    }
 
     // Direction is taken from the value as a whole, never per cell: across a
-    // carry (350 -> 349) the units rise while the tens fall, and rolling the
-    // two opposite ways in the same frame looks like a fault rather than a
-    // counter. Both strings are the same length and all digits by now, so the
-    // byte compare IS the numeric compare - no strtol, no overflow to think
-    // about.
-    if (memcmp(cells, _shadow[scr], geom.digits) > 0)
-        _slideUp |= ((uint8_t)1 << scr);
-    else
-        _slideUp &= ~((uint8_t)1 << scr);
+    // carry (350 -> 349) the units rise while the tens fall, and turning the
+    // two opposite ways at once looks like a fault rather than a counter. Both
+    // strings are the same length and all digits by now, so the byte compare
+    // IS the numeric compare - no strtol, no overflow to think about.
+    if (cmp > 0) _drumUp |= ((uint8_t)1 << scr);
+    else         _drumUp &= ~((uint8_t)1 << scr);
 
-    _slideMask[scr]    = mask;
-    _slidePending[scr] = mask;
-    _slideFrame[scr]   = 1;
-    memcpy(_slideTo[scr], cells, geom.digits);
-    _slideTo[scr][geom.digits] = 0x00;
-    _slideActive |= ((uint8_t)1 << scr);
+    for (uint8_t i = 0; i < geom.digits; i++) {
+        uint8_t to = (uint8_t)(cells[i] - '0');
+        if (_drumMoving[scr] & ((uint8_t)1 << i)) {
+            _drumTarget[scr][i] = to; // already turning - just re-aim it
+        } else if (cells[i] != _shadow[scr][i]) {
+            _drumPos[scr][i]    = (uint16_t)(_shadow[scr][i] - '0') * 256;
+            _drumTarget[scr][i] = to;
+            _drumMoving[scr] |= ((uint8_t)1 << i);
+        }
+    }
+    _drumActive |= ((uint8_t)1 << scr);
 
-    // First cell now, not up to a frame period from now: the value has already
+    // First step now, not up to a frame period from now: the value has already
     // changed and the screen should start moving on the same update() an
     // unanimated screen would have snapped on.
     _lastFrameMs = millis();
-    slideStep();
+    drumStep();
     return true;
 }
 

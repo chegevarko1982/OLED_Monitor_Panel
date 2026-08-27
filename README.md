@@ -134,8 +134,10 @@ ANIM=<names joined with +>|FRAMES=<2..8>
 | `ANIM=RA\|FRAMES=6` | 6 frames instead of 4 |
 | `ANIM=OFF` | explicitly off |
 
-`FRAMES` is 2..8 at 12 ms per frame, so the default 8 gives a 96 ms roll in
-5-pixel steps and 4 gives 48 ms in steps twice that size. Names and keys are case insensitive and their order does not
+`FRAMES` is 2..8 and sets how briskly a wheel turns: 8, the default, brings a
+one-digit change round in about 96 ms, 4 in 60 ms, 2 in 36 ms. It is a speed,
+not a step count - a wheel re-aimed while it is still turning simply has
+further to travel. Names and keys are case insensitive and their order does not
 matter, so `frames=2|anim=all` is the same string. A value that cannot be
 parsed switches animation off entirely and reports
 
@@ -163,7 +165,9 @@ A transition is snapped rather than rolled when rolling would be meaningless:
 - during Light Test;
 - when the step moves more than two digits at once. `300` to `299` clicks over -
   a small step scrolls, a jump snaps;
-- when two digits are already rolling anywhere on the panel. That is the hard
+- when a digit at rest would have to start turning and two are already turning
+  anywhere on the panel. Re-aiming a wheel that is already in motion is free
+  and never snaps - that is the case a knob being turned quickly produces. That is the hard
   ceiling and it is arithmetic, not taste: one digit's frame costs 7.1 ms and
   the firmware draws one per 12 ms period, so N digits rolling for F frames
   take N x F x 12 ms. Holding an 8-frame roll near 100 ms allows at most about

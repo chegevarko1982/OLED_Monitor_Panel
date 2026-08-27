@@ -52,6 +52,10 @@ enum : uint8_t {
 
 // Frame count bounds accepted from the Config string, and the default when
 // it names screens but no FRAMES=.
+// Widest digit layout on the panel: FCU ALT, five cells. _shadow[] keeps a
+// sixth byte for its NUL terminator; the drum arrays do not need one.
+#define MAX_DIGIT_CELLS 5
+
 #define ANIM_FRAMES_MIN     2
 #define ANIM_FRAMES_MAX     8
 #define ANIM_FRAMES_DEFAULT 8
@@ -94,20 +98,27 @@ private:
     char    _shadow[SCR_COUNT][6];    // digit characters as last drawn, NUL-terminated
     uint8_t _shadowSig[SCR_COUNT];    // layout signature of what is on screen; 0 = unknown
 
-    // Odometer slide state, one entry per screen. Slides run concurrently:
-    // the budget that matters is not "one screen at a time" but the length of
-    // the single blocking stretch, and slideStep() draws exactly one cell per
-    // call - 7.1 ms measured - no matter how many screens are moving. Screens
-    // then take turns through _slideCursor, so a screen the sim drives hard
-    // cannot lock the others out. See slideStep() for the arithmetic.
-    uint8_t  _slideActive;              // bit per screen with a slide in flight
-    uint8_t  _slideMask[SCR_COUNT];     // cells moving in that screen's slide
-    uint8_t  _slidePending[SCR_COUNT];  // cells of the current frame not drawn yet
-    uint8_t  _slideFrame[SCR_COUNT];    // frames drawn so far, 1.._animFrames
-    uint8_t  _slideUp;                  // bit per screen: digits roll upward
-    char     _slideTo[SCR_COUNT][6];    // target cell string, shaped like _shadow[]
-    uint8_t  _slideCursor;              // round-robin position over the screens
-    uint32_t _lastFrameMs;              // millis() at the last cell drawn
+    // Odometer drum state, one entry per digit cell.
+    //
+    // A cell is a wheel carrying 0..9, and _drumPos is where that wheel has
+    // turned to - Q8 in digit units, so 0x0250 is "half way between 2 and 3".
+    // Everything follows from keeping a position rather than a from/to pair:
+    // a value arriving mid-roll only moves _drumTarget, and the wheel carries
+    // on from where it is. Nothing is ever interrupted, which is the whole
+    // point - the previous fixed-length slide had to abort on every value that
+    // landed inside its 96 ms, and an aborted roll is exactly what a snapped
+    // digit looks like.
+    //
+    // Cells roll concurrently and drumStep() advances exactly one per call -
+    // 7.1 ms measured, the longest stretch this firmware blocks serial for.
+    // _drumCursor takes them in turn so no screen can starve the others.
+    uint16_t _drumPos[SCR_COUNT][MAX_DIGIT_CELLS];    // Q8 digit units, 0..DRUM_SPAN-1
+    uint8_t  _drumTarget[SCR_COUNT][MAX_DIGIT_CELLS]; // digit 0..9 each cell is turning to
+    uint8_t  _drumMoving[SCR_COUNT];                  // bit per cell still turning
+    uint8_t  _drumActive;                             // bit per screen with any cell turning
+    uint8_t  _drumUp;                                 // bit per screen: wheel turns upward
+    uint8_t  _drumCursor;                             // round-robin position over screens
+    uint32_t _lastFrameMs;                            // millis() at the last cell advanced
 
     void setTCAChannel(byte i);
     void blankAllDisplays(void);
@@ -123,9 +134,8 @@ private:
     bool renderCells(uint8_t scr, const char *cells, uint8_t sig);
     void commitCells(uint8_t scr, const char *cells, uint8_t sig);
     bool slideCells(uint8_t scr, const char *cells, uint8_t sig);
-    void slideStep(void);
-    void abortSlide(uint8_t scr);
-    void finishSlide(uint8_t scr);
+    void drumStep(void);
+    void abortDrum(uint8_t scr);
     void updateDisplayEfisLeft(void);
     void updateDisplayEfisRight(void);
     void updateDisplayFcuSpd(void);
