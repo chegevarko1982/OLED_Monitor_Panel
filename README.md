@@ -72,11 +72,11 @@ environment and falling back to `0.0.1`. MobiFlight looks for exactly the file n
 `FirmwareBaseName` + `LatestFirmwareVersion` in `board.json`, so those two have to agree or the
 package installs and then fails to flash.
 
-`board.json` declares `LatestFirmwareVersion: 1.0.0`, so a package meant for MobiFlight must be
+`board.json` declares `LatestFirmwareVersion: 1.0.1`, so a package meant for MobiFlight must be
 built with that version:
 
 ```
-VERSION=1.0.0 pio run -e oled_monitor_panel_mega
+VERSION=1.0.1 pio run -e oled_monitor_panel_mega
 ```
 
 A plain `pio run` produces `oled_monitor_panel_mega_0_0_1.hex`, which is fine for flashing over
