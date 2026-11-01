@@ -358,6 +358,7 @@ OledMonitorPanel::OledMonitorPanel()
     _busFaultReported = false;
     _busTimeoutReported = false;
     _dirty = 0;
+    _blanked = 0;
     _animMask = 0;
     _animFrames = ANIM_FRAMES_DEFAULT;
     _drumActive = 0;
@@ -538,6 +539,7 @@ void OledMonitorPanel::begin()
 
     // All eight screens were just drawn above - nothing pending yet.
     _dirty      = 0;
+    _blanked    = 0;
     _drumActive = 0;
     memset(_drumMoving, 0, sizeof(_drumMoving));
 
@@ -573,26 +575,22 @@ void OledMonitorPanel::set(int16_t messageID, char *message)
     switch (messageID) {
     case 2:
         // Efis Left Baro Value Hg
-        if (updateValue(efisLeftBaroValueHg, sizeof(efisLeftBaroValueHg), message))
-            _dirty |= (1 << SCR_EFIS_LEFT);
+        markValue(SCR_EFIS_LEFT, updateValue(efisLeftBaroValueHg, sizeof(efisLeftBaroValueHg), message));
         break;
 
     case 5:
         // Efis Right Baro Value Hpa
-        if (updateValue(efisRightBaroValueHpa, sizeof(efisRightBaroValueHpa), message))
-            _dirty |= (1 << SCR_EFIS_RIGHT);
+        markValue(SCR_EFIS_RIGHT, updateValue(efisRightBaroValueHpa, sizeof(efisRightBaroValueHpa), message));
         break;
 
     case 6:
         // Efis Right Baro Value Hg (this is the Radio Altimeter screen)
-        if (updateValue(efisRightBaroValueHg, sizeof(efisRightBaroValueHg), message))
-            _dirty |= (1 << SCR_FCU_FPA);
+        markValue(SCR_FCU_FPA, updateValue(efisRightBaroValueHg, sizeof(efisRightBaroValueHg), message));
         break;
 
     case 8:
         // Fcu Speed Value
-        if (updateValue(fcuSpeedValue, sizeof(fcuSpeedValue), message))
-            _dirty |= (1 << SCR_FCU_SPD);
+        markValue(SCR_FCU_SPD, updateValue(fcuSpeedValue, sizeof(fcuSpeedValue), message));
         break;
 
     case 9: {
@@ -609,8 +607,7 @@ void OledMonitorPanel::set(int16_t messageID, char *message)
 
     case 10:
         // Fcu Hdg Value
-        if (updateValue(fcuHdgValue, sizeof(fcuHdgValue), message))
-            _dirty |= (1 << SCR_FCU_HDG);
+        markValue(SCR_FCU_HDG, updateValue(fcuHdgValue, sizeof(fcuHdgValue), message));
         break;
 
     case 11: {
@@ -636,8 +633,7 @@ void OledMonitorPanel::set(int16_t messageID, char *message)
     }
 
     case 13:
-        if (updateValue(fcuAltValue, sizeof(fcuAltValue), message))
-            _dirty |= (1 << SCR_FCU_ALT);
+        markValue(SCR_FCU_ALT, updateValue(fcuAltValue, sizeof(fcuAltValue), message));
         break;
 
     case 14: {
@@ -650,13 +646,11 @@ void OledMonitorPanel::set(int16_t messageID, char *message)
     }
 
     case 15:
-        if (updateValue(fcuVsValue, sizeof(fcuVsValue), message))
-            _dirty |= (1 << SCR_FCU_VS);
+        markValue(SCR_FCU_VS, updateValue(fcuVsValue, sizeof(fcuVsValue), message));
         break;
 
     case 16:
-        if (updateValue(fcuVsValueFpa, sizeof(fcuVsValueFpa), message))
-            _dirty |= (1 << SCR_FCU_VS);
+        markValue(SCR_FCU_VS, updateValue(fcuVsValueFpa, sizeof(fcuVsValueFpa), message));
         break;
 
     case 17: {
@@ -688,19 +682,55 @@ void OledMonitorPanel::set(int16_t messageID, char *message)
     }
 
     case 20:
-        if (updateValue(CRSValue, sizeof(CRSValue), message))
-            _dirty |= (1 << SCR_AUX);
+        markValue(SCR_AUX, updateValue(CRSValue, sizeof(CRSValue), message));
         break;
 
     case -1:
     case -2:
         blankAllDisplays();
         _dirty = 0; // don't let a pending redraw re-light a screen after shutdown
+        // The stored values survive this, MobiFlight's own cache does not:
+        // Stop clears it, and Run resends every value as if for the first
+        // time. Most come back unchanged - a speed, Mach or CRS of zero on the
+        // ground - and would leave their screen dark until they moved. See
+        // markValue().
+        _blanked = 0xFF;
         break;
 
     default:
         break;
     }
+}
+
+/*
+  Marks screen scr for a redraw after a value message for it arrived: when the
+  value changed, as always, and also when it is the first value for that
+  screen since blankAllDisplays() put it out.
+
+  updateValue() alone cannot tell the second case apart. After Stop/Run every
+  value comes back from MobiFlight, but most of them are identical to what is
+  stored here, so they compare equal and nothing is drawn onto a screen that
+  is actually black - the panel looked dead until the sim moved the value.
+
+  The stored values are deliberately kept rather than cleared to force the
+  comparison. They are still the truth - MobiFlight is resending exactly them
+  - and a screen can be repainted by something other than its value: a mode
+  message (managed, TRK, SPD/MACH), light test, or FPA mode on the V/S screen,
+  whose value comes from a second message a profile may not send at all. An
+  emptied buffer would be drawn as an empty field in every one of those.
+
+  Any value message clears the bit, changed or not: from then on the screen
+  is showing what it should and ordinary change detection is enough. Mode
+  messages leave it alone - a repaint they trigger draws the stored value,
+  and the value message that follows costs one redraw at worst, which
+  renderCells() turns into nothing when the cells already match.
+*/
+void OledMonitorPanel::markValue(uint8_t scr, bool changed)
+{
+    uint8_t bit = (uint8_t)1 << scr;
+    if (changed || (_blanked & bit))
+        _dirty |= bit;
+    _blanked &= ~bit;
 }
 
 void OledMonitorPanel::update()

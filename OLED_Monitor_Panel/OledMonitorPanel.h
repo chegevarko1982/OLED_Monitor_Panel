@@ -75,6 +75,7 @@ private:
     uint8_t       _addrI2C;
     uint8_t       _currentChannel;
     uint8_t       _dirty;
+    uint8_t       _blanked;     // bit per SCR_*: blanked, no value received since - see markValue()
     uint8_t       _animMask;    // ANIM_* bits; 0 = animation off (default)
     uint8_t       _animFrames;  // frames per slide, ANIM_FRAMES_MIN..MAX
     OLEDInterface *oled;
@@ -125,6 +126,7 @@ private:
 
     void setTCAChannel(byte i);
     void blankAllDisplays(void);
+    void markValue(uint8_t scr, bool changed);
     void renderScreen(uint8_t scr);
     void printCentered(const char *text, int16_t y);
     void renderLabelValue(byte channel,
